@@ -326,7 +326,7 @@ three groups:
 - State-classified segments that the selection rules left out for a reason other than the city
   limits.
 - Segments that the city-limits clip removed while one side was still outside the city.
-- Segments with no match on the other side.
+- Dispatch (CAD) segments with no match in the county street layer.
 
 ## Limits
 
