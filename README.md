@@ -70,8 +70,9 @@ PASS  and when BOTH spellings are in the layer, stripping the check digit merges
 ...
 PASS  and every rule override defaults to 'whatever the profile says'  <-- pinned defect
 PASS  nalmatch imports no network module: there is no upload path to audit, and no credential for one to carry
+PASS  a unique prefix of --apply is refused by the parser, not read as the write flag  <-- pinned defect
 --------------------------------------------------------------------
-407 assertions, 0 failed
+408 assertions, 0 failed
 ```
 
 ## Requirements
@@ -80,9 +81,10 @@ Python 3.9 or newer and nothing else. No `arcpy`, no third-party package, no net
 database. Both sides are CSVs, which is what every parcel layer and every roll extract can be
 exported as.
 
-The same 407 assertions run everywhere: 407 on Windows (3.13.2), 407 on Ubuntu (3.12.3) and 407
-on ArcGIS Pro's own interpreter (3.13.7). The code uses no syntax newer than Python 3.6, but 3.12
-is the oldest interpreter it has actually been run on.
+The self-test runs 408 assertions on Windows (3.13.2) and on ArcGIS Pro's own interpreter (3.13.7),
+both measured after the write-flag assertion was added. The Ubuntu (3.12.3) run has not been repeated
+since, so its last count of 407 predates that assertion. The code uses no syntax newer than Python
+3.6, but 3.12 is the oldest interpreter it has actually been run on.
 
 ```
 git clone https://github.com/uhsear/nalmatch.git
@@ -305,6 +307,26 @@ statement about any statute, and `--max-len` changes it.
 
 Exit 3 is deliberately not exit 1. A script that treats "some parcels did not match" as routine
 must not treat "this key rule is wrong" the same way.
+
+## Remapped identifiers and filtered rows
+
+nalmatch has no crosswalk. It does not map a legacy identifier to the identifier that replaced it.
+A legacy identifier can carry an ASCII character outside the separators, such as `12345#001`. That
+character stays in the key, so `12345#001` does not match `12345001`. Both appear in the report:
+one under GIS ONLY and one under ROLL ONLY. The tool names the pair, but it does not say that
+they are one parcel. If the county renumbered parcels, apply your own crosswalk first. Then run
+nalmatch on the translated column.
+
+nalmatch also sees only the rows in the two CSVs. If a selection rule filtered either side before
+the export, the rows it dropped never reach the tool, and no class reports them. A rules-based
+selection drops rows without a trace, just as a join does. Make the step that filters write out
+what it left out, grouped by reason. One county road-layer build does this. Its QC report lists
+three groups:
+
+- State-classified segments that the selection rules left out for a reason other than the city
+  limits.
+- Segments that the city-limits clip removed while one side was still outside the city.
+- Segments with no match on the other side.
 
 ## Limits
 

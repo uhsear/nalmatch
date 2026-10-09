@@ -1775,6 +1775,22 @@ def self_test():
     check(re.search(r"^\s*(def|class)\s", source, re.M) is not None,
           "and that search really was run over this file's own source")
 
+    # ---- the write flag is reached only by its full spelling
+    # argparse would take --ap as --apply. A prefix that lands on the write
+    # flag must be refused, and the parser exits 2 without writing.
+    stderr = sys.stderr
+    sys.stderr = io.StringIO()
+    try:
+        _parse(["a", "b", "--ap"])
+        refused = False
+    except SystemExit as exc:
+        refused = exc.code == 2
+    finally:
+        sys.stderr = stderr
+    check(refused,
+          "a unique prefix of --apply is refused by the parser, not read as "
+          "the write flag  <-- pinned defect")
+
     print("-" * 68)
     total = passed[0] + len(failed)
     if failed:
@@ -1795,6 +1811,7 @@ def _parse(argv):
                     "name every parcel that exists on one side only.",
         epilog="Nothing is written without --apply. A rule that would give "
                "two distinct parcels the same key is refused, not reported.",
+        allow_abbrev=False,
     )
     ap.add_argument("gis", nargs="?", help="the parcel layer as a CSV")
     ap.add_argument("roll", nargs="?", help="the tax roll extract as a CSV")
