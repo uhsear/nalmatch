@@ -1438,7 +1438,17 @@ def self_test():
         dup_header = os.path.join(tmp, "dup-header.csv")
         write(dup_header, b"PARCEL_ID,PARCEL_ID\nA,B\n")
         check(column(read_csv_rows(dup_header)[1], "PARCEL_ID") == ["B"],
-              "a duplicate header name is read with the last column winning")
+              "a duplicate header name is read with the last column winning "
+              "by the reader itself")
+        dup_roll = os.path.join(tmp, "dup-roll.csv")
+        write(dup_roll, b"PARCEL_ID\nB\n")
+        rc, out = capture(lambda: main([dup_header, dup_roll]))
+        check(rc == 2 and "more than once" in out and "RECONCILES" not in out,
+              "but the run refuses an identifier column named twice: exit 2, "
+              "not RECONCILES over the column csv kept  <-- pinned defect")
+        rc, out = capture(lambda: main([dup_roll, dup_header]))
+        check(rc == 2 and "more than once" in out,
+              "on the roll side as well  <-- pinned defect")
         # A row with fewer cells than the header is how a real None reaches
         # the core: csv fills the missing trailing fields with None.
         ragged = os.path.join(tmp, "ragged.csv")
@@ -1709,9 +1719,9 @@ def self_test():
         restored = [row[2][1:] for row in hostile_rows[1:7]]
         check(restored == ["=1+1", "+7", "-8", "@x", chr(9) + "TAB",
                            chr(13) + "CR"],
-              "the guard is lossless: dropping that one apostrophe gives the "
-              "input identifier back, which is the round trip a reader of the "
-              "file would apply")
+              "dropping that one apostrophe gives the input identifier back "
+              "for every identifier that did not start with an apostrophe, "
+              "which is the round trip a reader of the file would apply")
         check(hostile_rows[7][2] == "12-3",
               "an identifier with a hyphen inside it is written exactly as "
               "read, with no apostrophe")
@@ -2238,6 +2248,13 @@ def _ids(path, field, args_label):
         raise LookupError("%s has no field %r. Name the right one with %s. "
                           "It has: %s"
                           % (path, field, args_label, ", ".join(fields)))
+    if fields.count(field) > 1:
+        # csv.DictReader keeps the last column of that name and drops the
+        # others, so the identifiers in the first column would never be seen
+        # and the run could report RECONCILES over the wrong column.
+        raise ValueError("%s has the field %r more than once, so the tool "
+                         "cannot tell which column holds the identifier. "
+                         "Rename one of them and run again." % (path, field))
     return column(rows, field), fields
 
 

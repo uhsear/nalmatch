@@ -75,8 +75,9 @@ PASS  the key column guards a leading equals with one apostrophe and changes no 
 PASS  the detail column guards a leading equals with one apostrophe and changes no other cell  <-- pinned defect
 PASS  a number or None passes through unchanged, so a numeric column stays numeric  <-- pinned defect
 PASS  every hostile identifier reaches the file with one apostrophe in front  <-- pinned defect
-PASS  the guard is lossless: dropping that one apostrophe gives the input identifier back, which is the round trip a reader of the file would apply
+PASS  dropping that one apostrophe gives the input identifier back for every identifier that did not start with an apostrophe, which is the round trip a reader of the file would apply
 PASS  an identifier with a hyphen inside it is written exactly as read, with no apostrophe
+PASS  but the run refuses an identifier column named twice: exit 2, not RECONCILES over the column csv kept  <-- pinned defect
 ...
 PASS  and every rule override defaults to 'whatever the profile says'  <-- pinned defect
 PASS  nalmatch imports no network module: there is no upload path to audit, and no credential for one to carry
@@ -84,7 +85,8 @@ PASS  a unique prefix of --apply is refused by the parser, not read as the write
 PASS  the footer of a green run is the count and 0 failed
 PASS  the footer of a red run names every failed assertion and returns 1
 --------------------------------------------------------------------
-450 assertions, 0 failed
+488 assertions, 0 failed
+
 ```
 
 ## Requirements
@@ -93,11 +95,11 @@ Python 3.9 or newer and nothing else. No `arcpy`, no third-party package, no net
 database. Both sides are CSVs, which is what every parcel layer and every roll extract can be
 exported as.
 
-The self-test runs 450 assertions and the count is the same on every interpreter it was run on:
+The self-test runs 488 assertions and the count is the same on every interpreter it was run on:
 Windows CPython 3.9.25, 3.12.10 and 3.13.2, ArcGIS Pro's own interpreter (3.13.7), and Ubuntu
 CPython 3.12.3. There is no unavoidable difference between hosts. Measured with
 `coverage run --branch nalmatch.py --self-test` (coverage 7.16.1), branch coverage is 100%
-(1007 statements, 168 branches, 0 missed). The one line the self-test cannot reach is
+(1147 statements, 176 branches, 0 missed). The one line the self-test cannot reach is
 `sys.exit(main())` under `if __name__ == "__main__"`, which runs only when the file is the
 program and is marked `# pragma: no cover`. The exit codes it forwards are asserted through
 `main()` directly.
@@ -134,7 +136,7 @@ python nalmatch.py parcels.csv nal.csv --json > nalmatch.json
 | `--gis-id-field` | `PARCEL_ID` | Identifier column in the parcel layer. |
 | `--roll-id-field` | `PARCEL_ID` | Identifier column in the roll extract. |
 | `--case` | profile | `fold` to upper case, or `keep` the case as it arrived. |
-| `--punctuation` | profile | `strip` the separators `- . _ /`, or `keep` them. |
+| `--punctuation` | profile | `strip` the separators `- . _ /` and the space, or `keep` them. |
 | `--pad` | profile | `auto`, an exact width, or `off`. Leading zeros, restored. |
 | `--check-digit` | profile | `strip` the last character of every identifier, or `keep` it. |
 | `--max-len` | profile | Refuse an identifier longer than N characters. `0` is no ceiling. |
@@ -150,7 +152,7 @@ The two profiles:
 | Rule | `florida-nal` | `generic` |
 |---|---|---|
 | Fold case | yes | yes |
-| Strip `- . _ /` | yes | no |
+| Strip `- . _ /` and the space | yes | no |
 | Pad numbers with leading zeros | yes, to the widest seen | no |
 | Strip a trailing check digit | no | no |
 | Length ceiling | 18 characters | none |
@@ -161,12 +163,27 @@ can bring two different identifiers together has to be asked for by name.
 
 ## What one run says
 
+Two small synthetic files stand in for the story. The layer holds the parcels as the county
+numbers them. The roll came through a spreadsheet and lost the leading zero.
+
+```
+parcels.csv                          nal.csv
+OBJECTID,PARCEL_ID                   PARCEL_ID,OWNER
+1,049300117                          49300117,A
+2,049300118                          49300118,B
+3,049300119                          49300119,C
+4,049300120                          49300120,D
+5,049399999                          13000501,E
+6,
+7,1234567890123456789
+```
+
 ```
 $ python nalmatch.py parcels.csv nal.csv
-nalmatch: parcels.csv 1215 record(s), nal.csv 1213 record(s)
+nalmatch: parcels.csv 7 record(s), nal.csv 5 record(s)
 
 KEY RULE  profile florida-nal, fold case, strip punctuation, pad numbers to 9, ceiling 18 characters, reject non-ASCII
-MATCHED   1212 key(s) on both sides
+MATCHED   4 key(s) on both sides
 GIS ONLY  1 parcel(s) with no roll record
       049399999  ->  049399999
 ROLL ONLY 1 roll record(s) with no parcel
@@ -182,25 +199,41 @@ The same two files with `--pad off`, which is the join that ran for nine months:
 
 ```
 $ python nalmatch.py parcels.csv nal.csv --pad off
-nalmatch: parcels.csv 1215 record(s), nal.csv 1213 record(s)
+nalmatch: parcels.csv 7 record(s), nal.csv 5 record(s)
 
 KEY RULE  profile florida-nal, fold case, strip punctuation, no padding, ceiling 18 characters, reject non-ASCII
-MATCHED   900 key(s) on both sides
-GIS ONLY  313 parcel(s) with no roll record
-      049300000  ->  049300000
-      049300001  ->  049300001
-      049300002  ->  049300002
-...
+MATCHED   0 key(s) on both sides
+GIS ONLY  5 parcel(s) with no roll record
+      049300117  ->  049300117
+      049300118  ->  049300118
+      049300119  ->  049300119
+      049300120  ->  049300120
+      049399999  ->  049399999
+ROLL ONLY 5 roll record(s) with no parcel
+      49300117  ->  49300117
+      49300118  ->  49300118
+      49300119  ->  49300119
+      49300120  ->  49300120
+      13000501  ->  13000501
+DUPLICATE 0 key(s) written more than once
+REJECTED  2 identifier(s) this profile will not use
+      (empty)  ->  empty once trimmed, so there is no identifier to match on
+      1234567890123456789  ->  longer than this profile allows, so it belongs to a different identifier scheme
+VERDICT: DOES NOT RECONCILE
 ```
 
-900 matched. Every line of that is true, and the subdivision is in the 313.
+Both outputs above are real runs of this file on the two synthetic CSVs. With padding, four
+parcels match and the two leftovers are named. Without it, nothing matches and the four
+parcels that lost a zero sit in both lists.
 
 ## Why not just join the two tables
 
-Because the join already works. `arcpy.AddJoin_management`, a pandas `merge`, and a `LEFT JOIN`
-in the database all match the rows correctly and quickly. A pandas merge with `indicator=True`
-goes further and tells you which side each row came from, which is classes 1 and 2 above for one
-keyword. If you only need to know what did not match under a key you already trust, use it.
+Because the join already works. The Add Join tool in ArcGIS Pro matches "when the input field
+and join field values are equal", a pandas `merge` matches on the key you give it, and a `LEFT
+JOIN` in the database does the same. A pandas merge with `indicator=True` goes further and tells
+you which side each row came from (`left_only`, `right_only`, `both`), which is classes 1 and 2
+above for one keyword. If you only need to know what did not match under a key you already
+trust, use it.
 
 None of the three has an opinion about the key. They match the identifier you hand them, and they
 report a clean join over whatever subset agreed. The 312 lots in the story were not a join bug:
@@ -231,14 +264,19 @@ gives two distinct parcels the same key, the join will succeed and be wrong: one
 other's roll record, and nothing anywhere reports an error.
 
 ```
-$ python nalmatch.py merge.csv small.csv
-nalmatch: merge.csv 3 record(s), small.csv 1 record(s)
+$ cat merge.csv          $ cat small.csv
+PARCEL_ID                PARCEL_ID
+123456                   9
+0123456
 
-KEY RULE  profile florida-nal, fold case, strip punctuation, pad numbers to 8, ceiling 18 characters, reject non-ASCII
+$ python nalmatch.py merge.csv small.csv
+nalmatch: merge.csv 2 record(s), small.csv 1 record(s)
+
+KEY RULE  profile florida-nal, fold case, strip punctuation, pad numbers to 7, ceiling 18 characters, reject non-ASCII
 REFUSED   this rule gives 2 distinct identifier(s) 1 shared key(s)
-      gis key 00123456 is claimed by:
-          0123456
+      gis key 0123456 is claimed by:
           123456
+          0123456
       nothing is reported against a rule that merges parcels. Change the rule or fix the identifiers.
 VERDICT: REFUSED
 ```
@@ -250,6 +288,10 @@ publishing an answer it already knows is wrong.
 
 `--pad off` on the same file reports those two as two ordinary unmatched parcels. The collision
 is a property of the rule you asked for, not of the data, and the way out is to change the rule.
+
+A header that names the identifier column twice is refused before any key is made, with exit
+2. `csv.DictReader` keeps only the last column of that name, so the other would never be read and
+the run could report `RECONCILES` over the wrong column.
 
 Two more things are refused, one identifier at a time rather than for the whole run:
 
@@ -267,7 +309,8 @@ steps matters:
 
 1. **Trim.** Leading and trailing whitespace is never part of an identifier.
 2. **Fold case.** `r12345` and `R12345` are one parcel.
-3. **Strip the separators** `- . _ /`. `12345-001-000` and `12345001000` are one parcel.
+3. **Strip the separators** `- . _ /` and the space. `12345-001-000` and `12345001000` are one
+   parcel, and so are `12 345` and `12345`.
 4. **Apply the ceiling.** Measured here, after the separators are gone, so `1234-5678-9012-3456-789`
    is refused as 19 digits rather than accepted as 23 characters.
 5. **Strip a check digit,** if asked. After the ceiling, so an identifier from another scheme can
@@ -292,12 +335,14 @@ an identifier.
 
 ## Field names
 
-The Florida tax roll is the Department of Revenue NAL and NAP extract, distributed once a year
-as a fixed layout file for each county. The identifier column in it is `PARCEL_ID`, which is this
-tool's default on both sides. `CO_NO` carries the county number, and `ASMNT_YR` the assessment
-year.
+The Florida tax roll is the Department of Revenue NAL (name, address, legal) and NAP extract,
+one file for each county. The Department's 2025 user's guide names the identifier field
+`PARCEL_ID`, which is this tool's default on both sides. The Department's 2025 submission
+standard says those files are comma-delimited with no header row, so add a header line (for
+example `CO_NO,PARCEL_ID,...`, in the order the user's guide gives for your year) before you
+point nalmatch at one. The field numbering differs between guide years.
 
-Those three are the only field names assumed anywhere, and only the first one is used. A GIS
+`PARCEL_ID` is the only field name assumed anywhere. A GIS
 parcel layer rarely agrees with any of them, which is why `--gis-id-field` and `--roll-id-field`
 exist and why naming a column that is not in the file is a usage error that lists the columns
 that are:
@@ -317,7 +362,7 @@ statement about any statute, and `--max-len` changes it.
 |---|---|
 | 0 | Everything reconciles. |
 | 1 | Something did not reconcile: class 1, 2, 3, or a rejected identifier. |
-| 2 | A file could not be read, or `--write-csv` could not be written. |
+| 2 | A file could not be read (not UTF-8, empty, no header, or the identifier column named twice), `--write-csv` could not be written, or both files hold a header and no records (verdict `NOTHING TO COMPARE`, never `RECONCILES`). |
 | 3 | Refused. The identifier rule would merge two parcels. |
 | 64 | Usage error. |
 
@@ -336,9 +381,11 @@ text cell, in all five columns, as the last step before the row is written.
   characters, and exactly one apostrophe. `12-3` is written as it came. `-8` becomes `'-8`.
 - A number or an empty value is not text, so it is not touched. Today every column is text, so
   this is a property of the function and not of any column.
-- The guard loses nothing. Drop the one leading apostrophe and the identifier you read is the
-  identifier you were given. The self-test pins that round trip against a file that holds all
-  six leads.
+- Drop the one leading apostrophe and you get the identifier back, with one exception: an
+  identifier that already starts with an apostrophe is written as it came, because an
+  apostrophe is not a lead. `=7` and `'=7` therefore both reach the file as `'=7`, and the file
+  cannot tell them apart. The self-test pins the round trip for the six leads and pins this
+  ambiguity.
 - nalmatch never reads its own CSV. `read_csv_rows` reads only the two files you name, so there
   is no strip on read. Do not feed the exception file back in as an input.
 - The apostrophe is visible text in the cell. It is a guard, not a display format.
@@ -360,14 +407,8 @@ nalmatch on the translated column.
 
 nalmatch also sees only the rows in the two CSVs. If a selection rule filtered either side before
 the export, the rows it dropped never reach the tool, and no class reports them. A rules-based
-selection drops rows without a trace, just as a join does. Make the step that filters write out
-what it left out, grouped by reason. One county road-layer build does this. Its QC report lists
-three groups:
-
-- State-classified segments that the selection rules left out for a reason other than the city
-  limits.
-- Segments that the city-limits clip removed while one side was still outside the city.
-- Dispatch (CAD) segments with no match in the county street layer.
+selection drops rows without a trace, just as a join does. Make the step that filters write
+out what it left out, grouped by reason.
 
 ## Limits
 
@@ -388,19 +429,60 @@ three groups:
   two files that never had them. Pass `--pad` an exact width when you know it.
 - A duplicate identifier is reported but does not stop the run, so a downstream join can still
   double count. The exception CSV names it.
-- The guard covers the six leads listed above. OWASP also lists a line
-  feed and full-width forms of `=` and `+`. A cell that starts with one of those is written as
-  it came.
+- The guard covers the six leads listed above. OWASP also lists a line feed and full-width
+  forms of `=` and `+`. A cell that starts with one of those is written as it came.
+- A lead character that follows a space is not guarded in the IDENTIFIER column, which keeps
+  the raw text. The trimmed KEY column is guarded. Whether a spreadsheet runs such a cell was
+  not tested.
+- Both files must be UTF-8. Anything else is refused with exit 2 and a message naming the byte
+  and its offset, rather than decoded with replacement characters.
+- Case folding covers ASCII letters only, so under `--non-ascii allow` an accented letter and
+  its capital stay two identifiers.
+- Do not point `--write-csv` at one of your input files: with `--apply` it replaces that input.
+- A refused run (exit 3) with `--apply` leaves any existing file at the `--write-csv` path
+  untouched, so a stale exception CSV from an earlier run stays on disk.
+- The exception file is opened for writing directly, so a failure part way through (a full
+  disk) can leave a truncated CSV together with exit 2.
+- The exception CSV is UTF-8 without a byte order mark. A spreadsheet may show an identifier
+  that passed `--non-ascii allow` as garbled text. This was not tested in a spreadsheet.
+- Identifiers the console cannot encode are shown as backslash escapes in the report. The CSV
+  is always UTF-8. The report otherwise prints identifiers as they are, so an identifier that
+  holds terminal control characters is echoed to the terminal.
+- A cell longer than the `csv` module's 131072 character limit makes the whole file exit 2
+  with a message. The one million character check in the self-test is about the identifier rule only.
+- A NUL byte inside an identifier is read as data on Python 3.13 and then matches
+  nothing clean, so it shows up as a mismatch and not as a read error.
+- A line that is completely empty is dropped by the `csv` module, so in a one-column file an
+  empty identifier written as a blank line is neither counted nor reported. Rows with several
+  columns are counted and reported.
+- A row with more cells than the header, usually an unquoted comma in an earlier column, is
+  read without a warning and shifts the identifier column for that row. The result is a
+  mismatch in the report, not a false match.
+- `--pad auto` also repairs a one-sided loss: layer `1234` matches roll `001234`. That is the
+  repair working as designed, and the limit above covers the case where both sides lost zeros.
 - Nothing is written without `--apply`, and a refused run writes nothing at all.
 - It opens no socket and imports no network module, so there is no credential anywhere in it to
-  leak. The self-test asserts that against its own source, which means a future edit that adds an
-  upload has to delete an assertion to do it.
+  leak. The self-test checks the import statements in its own source for the common network
+  modules. It does not see `__import__` or `importlib`, so it is a tripwire for an ordinary
+  edit and not a proof.
 
 ## References
 
 - OWASP, "CSV Injection": the leading characters (`=`, `+`, `-`, `@`, tab, carriage return, line
   feed) and the single quote prefix as one mitigation, with the warning that it can fail in
   Excel after a save and reopen. https://owasp.org/www-community/attacks/CSV_Injection
+- Esri, "Add Join (Data Management)": a match is made when the input field and join field values
+  are equal; unmatched input records are kept or dropped by the join type.
+  https://doc.esri.com/en/arcgis-pro/latest/tool-reference/data-management/add-join.html
+- pandas, `pandas.merge`: `indicator=True` adds a `_merge` column holding `left_only`,
+  `right_only` or `both`. https://pandas.pydata.org/docs/reference/api/pandas.merge.html
+- Python documentation, `str.isdigit`: digits include the compatibility superscript digits, and
+  a full width digit is a decimal character, so both pass `isdigit()`.
+  https://docs.python.org/3/library/stdtypes.html#str.isdigit
+- Florida Department of Revenue, "User's Guide, Department Property Tax Data Files" (NAL, SDF,
+  NAP) and the annual submission standard, which says the roll files carry no header row.
+  https://floridarevenue.com/property/dataportal/Documents/PTO%20Data%20Portal/User%20Guides/2025%20Users%20guide%20and%20quick%20reference/2025_NAL_SDF_NAP_Users_Guide.pdf
+  and https://floridarevenue.com/property/Documents/2025FINALCompSubmStd.pdf
 - Python documentation, `csv`: `csv.writer` writes `None` as the empty string and stringifies
   every other non-string value, and a file passed to it should be opened with `newline=''`.
   https://docs.python.org/3/library/csv.html
