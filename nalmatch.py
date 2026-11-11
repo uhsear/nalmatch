@@ -208,7 +208,7 @@ class Result(object):
     """What the two sides prove about each other under one rule."""
 
     def __init__(self, rules, width, gis, roll, collisions, duplicates,
-                 gis_only, roll_only, matched):
+                 gis_only, roll_only, matched, padded=()):
         self.rules = rules
         self.width = width
         self.gis = gis
@@ -218,6 +218,9 @@ class Result(object):
         self.gis_only = gis_only
         self.roll_only = roll_only
         self.matched = matched
+        # (key, gis identifier, roll identifier) for each match that exists
+        # only because padding gave two different strings the same key.
+        self.padded = list(padded)
 
     @property
     def rejected(self):
@@ -352,6 +355,30 @@ def split_repeats(entries, side):
     return duplicates, collisions
 
 
+def padded_matches(gis_before, roll_before, gis, roll):
+    """(key, gis identifier, roll identifier) for each pad-only match.
+
+    A match is pad-only when no identifier on the layer and none on the roll
+    made that key without the padding. 12345 against 012345 is the repair for a
+    spreadsheet that lost a zero, and it is also two parcels that happen to
+    share digits. The tool cannot tell those apart, so it names every one.
+    """
+    seen = {"gis": {}, "roll": {}}
+    for side, before, after in (("gis", gis_before, gis),
+                                ("roll", roll_before, roll)):
+        for early, late in zip(before, after):
+            if late.ok:
+                seen[side].setdefault(late.key, {}).setdefault(
+                    early.key, late.shown)
+    out = []
+    for key, forms in seen["gis"].items():
+        other = seen["roll"].get(key)
+        if other and not set(forms) & set(other):
+            out.append((key, list(forms.values())[0],
+                        list(other.values())[0]))
+    return out
+
+
 def reconcile(gis_raws, roll_raws, rules):
     """Both sides under one rule: what matched, what did not, what is refused.
 
@@ -365,11 +392,14 @@ def reconcile(gis_raws, roll_raws, rules):
     gis = prepare(gis_raws, rules)
     roll = prepare(roll_raws, rules)
     width = 0
+    padded = []
     if rules.pad_to is not None:
         width = rules.pad_to or pad_width(gis, roll)
         if width:
+            gis_before, roll_before = gis, roll
             gis = prepare(gis_raws, rules, width)
             roll = prepare(roll_raws, rules, width)
+            padded = padded_matches(gis_before, roll_before, gis, roll)
 
     gis_dupes, gis_collisions = split_repeats(gis, "gis")
     roll_dupes, roll_collisions = split_repeats(roll, "roll")
@@ -383,7 +413,7 @@ def reconcile(gis_raws, roll_raws, rules):
                   gis_collisions + roll_collisions,
                   gis_dupes + roll_dupes,
                   gis_only, roll_only,
-                  len(gis_keys & roll_keys))
+                  len(gis_keys & roll_keys), padded)
 
 
 def rule_summary(rules, width=0):
@@ -467,6 +497,15 @@ def describe(result, sample=DEFAULT_SAMPLE):
         return lines
 
     lines.append("MATCHED   %d key(s) on both sides" % result.matched)
+    if result.padded:
+        lines.append("PADDED    %d of those matched only because zeros were "
+                     "added, so they may be two parcels that share digits"
+                     % len(result.padded))
+        for key, gis_raw, roll_raw in result.padded[:sample]:
+            lines.append("      gis %s  =  roll %s  ->  %s"
+                         % (gis_raw, roll_raw, key))
+        if len(result.padded) > sample:
+            lines.append("      ... %d more" % (len(result.padded) - sample))
 
     def listing(head, entries, render):
         lines.append(head)
@@ -513,6 +552,8 @@ def as_json(result, sample=DEFAULT_SAMPLE):
         # above are the whole answer.
         return doc
     doc["matched"] = result.matched
+    doc["padded"] = [{"gis": g, "roll": r, "key": k}
+                     for k, g, r in result.padded[:sample]]
     doc["duplicates"] = [{"side": r.side, "key": r.key, "count": len(r.raws),
                           "identifier": r.raws[0]}
                          for r in result.duplicates[:sample]]
@@ -523,7 +564,8 @@ def as_json(result, sample=DEFAULT_SAMPLE):
     doc["rejected"] = [{"identifier": e.shown, "reason": e.reason,
                         "detail": REASON_TEXT[e.reason]}
                        for e in result.rejected[:sample]]
-    doc["counts"] = {"duplicates": len(result.duplicates),
+    doc["counts"] = {"padded": len(result.padded),
+                     "duplicates": len(result.duplicates),
                      "gis_only": len(result.gis_only),
                      "roll_only": len(result.roll_only),
                      "rejected": len(result.rejected)}
@@ -544,27 +586,35 @@ def read_csv_rows(path):
     into the same U+FFFD, so two identifiers that differ only in such a byte
     would become one key and the collision guard would never see them. A file
     that is not UTF-8 is refused and named instead (exit 2).
+
+    The whole file is decoded in one call, so the offset in the refusal is the
+    byte's position in the file. A text wrapper decodes in chunks and reports
+    the position inside the chunk, which is wrong for any file over 8 KB.
     """
     try:
-        with open(path, "r", newline="", encoding="utf-8-sig") as fh:
-            reader = csv.reader(fh)
-            fields = list(next(reader, None) or [])
-            rows = []
+        with open(path, "rb") as fh:
+            text = fh.read().decode("utf-8")
+        # utf-8-sig behaviour, done by hand so the offset above stays whole
+        # file: one leading byte order mark is dropped, as Excel writes it.
+        text = text[1:] if text.startswith(u"\ufeff") else text
+        reader = csv.reader(io.StringIO(text, newline=""))
+        fields = list(next(reader, None) or [])
+        rows = []
+        blank_lines = 0
+        for cells in reader:
+            if not cells:
+                blank_lines += 1
+                continue
+            # A blank line between records is a record with no identifier.
+            # csv.DictReader drops it, which in a one column file loses the
+            # record and still reports RECONCILES. A blank line at the end of
+            # the file is not a record.
+            rows.extend({name: "" for name in fields}
+                        for _ in range(blank_lines))
             blank_lines = 0
-            for cells in reader:
-                if not cells:
-                    blank_lines += 1
-                    continue
-                # A blank line between records is a record with no
-                # identifier. csv.DictReader drops it, which in a one column
-                # file loses the record and still reports RECONCILES. A
-                # blank line at the end of the file is not a record.
-                rows.extend({name: "" for name in fields}
-                            for _ in range(blank_lines))
-                blank_lines = 0
-                row = dict(zip(fields, cells))
-                row.update((name, None) for name in fields[len(cells):])
-                rows.append(row)
+            row = dict(zip(fields, cells))
+            row.update((name, None) for name in fields[len(cells):])
+            rows.append(row)
     except UnicodeDecodeError as exc:
         raise ValueError("%s is not valid UTF-8 (byte 0x%02x at offset %d). "
                          "Save it as CSV UTF-8 and run again."
@@ -628,12 +678,21 @@ def csv_rows(rows):
     return out
 
 
-def write_exceptions(path, result):
-    """Write the exception rows as a CSV. Returns how many were written."""
-    rows = exceptions(result)
+def write_rows(path, rows):
+    """Write rows as the exception CSV, every cell guarded. Returns the count.
+
+    Split from write_exceptions so a test can put hostile text in all five
+    columns and read the bytes back. exceptions() cannot produce hostile SIDE,
+    CLASS or DETAIL text today.
+    """
     with open(path, "w", newline="", encoding="utf-8") as fh:
         csv.writer(fh).writerows(csv_rows(rows))
     return len(rows)
+
+
+def write_exceptions(path, result):
+    """Write the exception rows as a CSV. Returns how many were written."""
+    return write_rows(path, exceptions(result))
 
 
 def build_rules(args):
@@ -1166,6 +1225,53 @@ def self_test():
     check(r.matched == 311 and len(r.gis_only) == 1,
           "one lot missing from the roll is one parcel reported")
 
+    # ---- a match that exists only because of padding is named, not hidden
+    r = reconcile(["12345", "AB-7"], ["012345", "AB7"], fl)
+    check(r.matched == 2 and r.verdict == RECONCILES and r.width == 6,
+          "12345 on the layer and 012345 on the roll match under the default "
+          "profile, which is the repair for a lost zero")
+    check(r.padded == [("012345", "12345", "012345")],
+          "and the tool names that pair as matched only by padding, because "
+          "it cannot tell a lost zero from two parcels  <-- pinned defect")
+    lines = describe(r)
+    check("PADDED    1 of those matched only because zeros were added, so "
+          "they may be two parcels that share digits" in lines
+          and "      gis 12345  =  roll 012345  ->  012345" in lines,
+          "the report prints it between MATCHED and the classes  "
+          "<-- pinned defect")
+    check(lines.index("MATCHED   2 key(s) on both sides") + 1
+          == lines.index([x for x in lines if x.startswith("PADDED")][0]),
+          "directly under the match count")
+    doc = as_json(r)
+    check(doc["padded"] == [{"gis": "12345", "roll": "012345",
+                             "key": "012345"}]
+          and doc["counts"]["padded"] == 1,
+          "the json carries the same pair and its count")
+    r = reconcile(subdivision, stripped, fl)
+    check(len(r.padded) == 312 and r.verdict == RECONCILES,
+          "the 312 lot repair is 312 pad-only matches and still reconciles")
+    lines = describe(r, 2)
+    check(sum(1 for x in lines if x.startswith("      gis ")) == 2
+          and "      ... 310 more" in lines,
+          "the PADDED list obeys --sample like every other list")
+    check(len(as_json(r, 2)["padded"]) == 2
+          and as_json(r, 2)["counts"]["padded"] == 312,
+          "and so does the json, while the count stays complete")
+    check(reconcile(["012345"], ["012345"], fl).padded == []
+          and reconcile(["12345"], ["12345"], fl).padded == [],
+          "the same string on both sides is not a pad-only match")
+    check(reconcile(["12345"], ["012345"], fl.replace(pad_to=None)).padded
+          == [] and reconcile(["12345"], ["012345"], generic).padded == [],
+          "with padding off nothing is padded, and the two do not match")
+    r = reconcile(["12345", "012345"], ["12345"], fl)
+    check(r.refused and describe(r)[-1] == "VERDICT: REFUSED"
+          and "PADDED" not in "".join(describe(r))
+          and "padded" not in as_json(r),
+          "a refused run prints and publishes no pad-only list")
+    r = reconcile(["12345"], ["012345"], fl.replace(pad_to=7))
+    check(r.padded == [("0012345", "12345", "012345")] and r.width == 7,
+          "an exact --pad width pads both sides to it and names the pair")
+
     # ---- empty sides
     r = reconcile([], [], fl)
     check(r.verdict == NOTHING and r.verdict != RECONCILES,
@@ -1391,9 +1497,9 @@ def self_test():
         parcels_csv = os.path.join(tmp, "parcels.csv")
         write(parcels_csv,
               b"OBJECTID,PARCEL_ID,SUBDIV\n"
-              b"1,00123-001-000,PINE RIDGE\n"
-              b"2,00123-001-001,PINE RIDGE\n"
-              b"3,00123-001-002,PINE RIDGE\n"
+              b"1,00123-001-000,SAMPLE SUBDIVISION\n"
+              b"2,00123-001-001,SAMPLE SUBDIVISION\n"
+              b"3,00123-001-002,SAMPLE SUBDIVISION\n"
               b"4,00999-001-000,ORPHAN\n"
               b"5,,NO ID\n"
               b"6,123456789012345678901234567,FOREIGN\n")
@@ -1434,6 +1540,21 @@ def self_test():
         check(rc == 2 and "not valid UTF-8" in out and "0xe9" in out
               and "CSV UTF-8" in out,
               "and the run exits 2 naming the byte and the way out")
+        far = os.path.join(tmp, "far.csv")
+        write(far, b"PARCEL_ID\n" + b"1234567\n" * 3000 + b"A\xe9\n")
+        raises(lambda: read_csv_rows(far),
+               "a bad byte in a file larger than the 8 KB decoder chunk is "
+               "refused too")
+        rc, out = capture(lambda: main([far, far]))
+        check(rc == 2 and "byte 0xe9 at offset 24011)" in out,
+              "and the offset is the position in the FILE, not in the "
+              "decoder chunk that held it  <-- pinned defect")
+        bom_far = os.path.join(tmp, "bom-far.csv")
+        write(bom_far, b"\xef\xbb\xbfPARCEL_ID\nA\xe9\n")
+        rc, out = capture(lambda: main([bom_far, bom_far]))
+        check(rc == 2 and "byte 0xe9 at offset 14)" in out,
+              "a byte order mark counts toward the offset, because it is in "
+              "the file  <-- pinned defect")
         latin_a = os.path.join(tmp, "latin-a.csv")
         write(latin_a, b"PARCEL_ID\r\nA\xe9-1\r\n")
         latin_b = os.path.join(tmp, "latin-b.csv")
@@ -1761,6 +1882,24 @@ def self_test():
                       for row in hostile_rows[1:]),
               "so no IDENTIFIER or KEY cell in the file starts with a "
               "trigger  <-- pinned defect")
+        # SIDE, CLASS and DETAIL are fixed text, so main() cannot put a lead
+        # in them. write_rows() takes the rows directly, and these assertions
+        # read the bytes of the file it wrote.
+        for index, column_name in enumerate(columns):
+            for lead_name, lead in leads:
+                plain_row = ["gis", "no-roll-record", "12345", "12345", "x"]
+                hostile = list(plain_row)
+                hostile[index] = lead + "1+1"
+                row_file = os.path.join(tmp, "row-%d.csv" % len(hostile_rows))
+                write_rows(row_file, [tuple(hostile)])
+                with open(row_file, "r", newline="", encoding="utf-8") as fh:
+                    written = list(csv.reader(fh))[1]
+                check(written[index] == "'" + lead + "1+1"
+                      and all(written[i] == plain_row[i]
+                              for i in range(5) if i != index),
+                      "the %s column reaches the FILE with a leading %s "
+                      "guarded and no other cell changed  <-- pinned defect"
+                      % (column_name, lead_name))
         restored = [row[2][1:] for row in hostile_rows[1:7]]
         check(restored == ["=1+1", "+7", "-8", "@x", chr(9) + "TAB",
                            chr(13) + "CR"],
@@ -1779,6 +1918,19 @@ def self_test():
         rc, out = capture(lambda: main([dashes, plain]))
         check(rc == 0 and "VERDICT: RECONCILES" in out,
               "florida-nal reconciles a dashed layer against a plain roll")
+        pad_gis = os.path.join(tmp, "pad-gis.csv")
+        write(pad_gis, b"PARCEL_ID\n12345\nAB-7\n")
+        pad_roll = os.path.join(tmp, "pad-roll.csv")
+        write(pad_roll, b"PARCEL_ID\n012345\nAB7\n")
+        rc, out = capture(lambda: main([pad_gis, pad_roll]))
+        check(rc == 0 and "VERDICT: RECONCILES" in out
+              and "PADDED    1 of those" in out
+              and "gis 12345  =  roll 012345" in out,
+              "end to end: the default run exits 0 and names the one pair "
+              "that matched only because of padding  <-- pinned defect")
+        rc, out = capture(lambda: main([pad_gis, pad_roll, "--pad", "off"]))
+        check(rc == 1 and "PADDED" not in out and "MATCHED   1 key" in out,
+              "--pad off matches only AB-7 and prints no PADDED line")
         rc, out = capture(lambda: main([dashes, plain, "--profile", "generic"]))
         check(rc == 1 and "MATCHED   0" in out,
               "generic matches none of them, because it strips no punctuation")

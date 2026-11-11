@@ -1,7 +1,8 @@
 # nalmatch
 
 Reconcile a GIS parcel layer against the tax roll and name every parcel that exists on one side
-only. Refuses any ID rule that would merge two parcels into one key.
+only. Refuses an ID rule that gives two identifiers on one side the same key, and names every
+match that exists only because a leading zero was added.
 
 A 312 lot subdivision disappeared from a county's public parcel search for nine months. The roll
 extract had come through a spreadsheet, which read the parcel identifier as a number and dropped
@@ -14,6 +15,9 @@ output rather than wrong in it, and nothing counts what is missing. The call cam
 company nine months later. The story is illustrative: its figures cannot be
 checked from this repository, and the self-test pins only the 312 lot count and the padding
 arithmetic.
+
+The quoted run is an excerpt: a line that reads `...` stands for self-test lines left out, and
+the first two lines and the last two lines are the real header and footer.
 
 ```
 $ python nalmatch.py --self-test
@@ -59,6 +63,10 @@ PASS  so the whole subdivision reconciles
 PASS  and with padding off NOT ONE of them matches, which is the join that succeeded  <-- pinned defect
 PASS  every parcel is reported on one side only
 ...
+PASS  and the tool names that pair as matched only by padding, because it cannot tell a lost zero from two parcels  <-- pinned defect
+...
+PASS  and the offset is the position in the FILE, not in the decoder chunk that held it  <-- pinned defect
+...
 PASS  and that missing cell is rejected rather than crashing the run
 PASS  with the word None printed nowhere  <-- pinned defect
 PASS  a blank line between records in a one column file is a record with an empty identifier, not a line the reader drops  <-- pinned defect
@@ -87,6 +95,11 @@ PASS  every hostile identifier reaches the file with one apostrophe in front  <-
 PASS  and so does a KEY that starts with = + or -  <-- pinned defect
 PASS  so no IDENTIFIER or KEY cell in the file starts with a trigger  <-- pinned defect
 ...
+PASS  the detail column reaches the FILE with a leading tab guarded and no other cell changed  <-- pinned defect
+PASS  the detail column reaches the FILE with a leading carriage return guarded and no other cell changed  <-- pinned defect
+...
+PASS  end to end: the default run exits 0 and names the one pair that matched only because of padding  <-- pinned defect
+...
 PASS  and does not fire on a longer module name or a comment
 PASS  and that search really was run over this file's own source
 PASS  a unique prefix of --apply is refused by the parser, not read as the write flag  <-- pinned defect
@@ -98,7 +111,7 @@ PASS  while a run that returns a code instead of exiting reports no SystemExit
 PASS  the footer of a green run is the count and 0 failed
 PASS  the footer of a red run names every failed assertion and returns 1
 --------------------------------------------------------------------
-494 assertions, 0 failed
+541 assertions, 0 failed
 ```
 
 ## Requirements
@@ -107,15 +120,15 @@ Python 3.9 or newer and nothing else. No `arcpy`, no third-party package, no net
 database. Both sides are CSVs, which is what every parcel layer and every roll extract can be
 exported as.
 
-The self-test runs 494 assertions and the count is the same on every interpreter it was run on:
+The self-test runs 541 assertions and the count is the same on every interpreter it was run on:
 Windows CPython 3.9.25, 3.12.10 and 3.13.2, ArcGIS Pro's own interpreter (3.13.7), and Ubuntu
 CPython 3.12.3. There is no unavoidable difference between hosts. Measured with
 `coverage run --branch nalmatch.py --self-test` (coverage 7.16.1), branch coverage is 100%
-(1172 statements, 180 branches, 0 missed). That figure depends on one `# pragma: no cover` on
+(1244 statements, 200 branches, 0 missed). That figure depends on one `# pragma: no cover` on
 the `if __name__ == "__main__"` line. Running the file as a program does execute
 `sys.exit(main())`. What cannot be reached is the other arc of that `if`, the one taken when
 the file is imported, because the self-test runs the file as the program. Without the pragma,
-the same run reports 1174 statements, 182 branches, one partial branch and 99%. The exit codes
+the same run reports 1246 statements, 202 branches, one partial branch (the `if` line, 2542 to the exit) and 99%. The exit codes
 `main()` forwards are asserted through `main()` directly.
 
 ```
@@ -198,6 +211,11 @@ nalmatch: parcels.csv 7 record(s), nal.csv 5 record(s)
 
 KEY RULE  profile florida-nal, fold case, strip punctuation, pad numbers to 9, ceiling 26 characters, reject non-ASCII
 MATCHED   4 key(s) on both sides
+PADDED    4 of those matched only because zeros were added, so they may be two parcels that share digits
+      gis 049300117  =  roll 49300117  ->  049300117
+      gis 049300118  =  roll 49300118  ->  049300118
+      gis 049300119  =  roll 49300119  ->  049300119
+      gis 049300120  =  roll 49300120  ->  049300120
 GIS ONLY  1 parcel(s) with no roll record
       049399999  ->  049399999
 ROLL ONLY 1 roll record(s) with no parcel
@@ -237,7 +255,8 @@ VERDICT: DOES NOT RECONCILE
 ```
 
 Both outputs above are real runs of this file on the two synthetic CSVs. With padding, four
-parcels match and the two leftovers are named. Without it, nothing matches and the four
+parcels match, the `PADDED` section names each of the four as a match that needed a zero added,
+and the two leftovers are named. Without it, nothing matches and the four
 parcels that lost a zero sit in both lists.
 
 ## Why not just join the two tables
@@ -316,8 +335,10 @@ Two more things are refused, one identifier at a time rather than for the whole 
   scheme, and the honest answer is to name it, not to trim it to 26 and match it against
   something. A county whose identifiers run longer than the guide allows passes `--max-len`.
 - An identifier holding a character outside ASCII. An en dash is not a hyphen and a full width
-  digit `U+FF11` is not a `1`. Unicode normalisation would fold both into the ASCII key, which is
-  a merge by another name. `--non-ascii allow` matches them verbatim instead.
+  digit `U+FF11` is not a `1`. Unicode normalisation (NFKC) folds the full width digit into an
+  ASCII `1`, which is a merge by another name. It leaves the en dash alone, so the en dash is
+  refused only because it is not one of the listed separators. `--non-ascii allow` matches both
+  verbatim instead.
 
 ## The normaliser
 
@@ -408,8 +429,12 @@ text cell, in all five columns, as the last step before the row is written.
   is no strip on read. Do not feed the exception file back in as an input.
 - The apostrophe is visible text in the cell. It is a guard, not a display format.
 
-What the self-test proves is the bytes in the file: it writes the CSV, reads it back with Python's
-`csv` module, and checks every guarded column for every lead. It does not open the file in a
+What the self-test proves is the bytes in the file, in two steps. A real run through `main()`
+writes the CSV, reads it back with Python's `csv` module, and checks the IDENTIFIER column for all
+six leads and the KEY column for `=`, `+` and `-`. A trimmed key cannot start with a tab or a
+carriage return. SIDE, CLASS and DETAIL are fixed text that `main()` cannot make hostile, so a
+second set of assertions calls `write_rows()` with a lead in each of the five columns and reads
+the written file back for all six leads. A second matrix calls `csv_rows()` in memory. It does not open the file in a
 spreadsheet, so what Excel or another program does with the apostrophe is OWASP's claim here and
 not something this repository tested. OWASP also warns that a quote prefix can fail in Excel
 after the file is saved and opened again.
@@ -442,6 +467,10 @@ out what it left out, grouped by reason.
 - A rule is applied to both sides or to neither. A check digit that exists on one side only
   cannot be handled by a symmetric rule, and stripping the last character of every identifier on
   both sides is the only thing `--check-digit strip` can honestly do.
+- A padded match is reported under `PADDED` and in the `--json` document, and it does not change
+  the verdict or the exit code, and it is not in the exception CSV. The tool cannot tell a lost
+  zero from two parcels that share digits, so a layer `12345` and a roll `012345` reconcile and
+  are named. Read that section before you trust a clean run.
 - `--pad auto` takes its width from the data in front of it. Two files that both lost their
   leading zeros pad to the short width and match each other, and the tool cannot tell that from
   two files that never had them. Pass `--pad` an exact width when you know it.
@@ -465,8 +494,6 @@ out what it left out, grouped by reason.
   an input file overwrites that file, as the input file itself does.
 - A roll file saved without a header row is read with its first record as the header, so the run
   stops with a usage error that lists that record as the column names.
-- `README.md` is committed with CRLF line endings and `nalmatch.py` with LF. This is harmless
-  and inconsistent.
 - Both files must be UTF-8. Anything else is refused with exit 2 and a message naming the byte
   and its offset, rather than decoded with replacement characters.
 - Case folding covers ASCII letters only, so under `--non-ascii allow` an accented letter and
@@ -494,7 +521,23 @@ out what it left out, grouped by reason.
   mismatch in the report. It is not a guarantee: a shifted cell that happens to equal another
   real identifier can match.
 - `--pad auto` also repairs a one-sided loss: layer `1234` matches roll `001234`. That is the
-  repair working as designed, and the limit above covers the case where both sides lost zeros.
+  repair working as designed, it is listed under `PADDED`, and the limit above covers the case
+  where both sides lost zeros.
+- The redirected-output encoding behaviour behind the backslash escapes (Windows uses the ANSI
+  code page) is taken from Python's documentation for `sys.stdout`. It was not tested under every
+  Windows locale.
+- Only the 2025 Department of Revenue guide was read. The field numbering differs between guide
+  years, and earlier guides were not compared.
+- The symbolic link behaviour of `--write-csv` comes from Python's `open()`. The self-test does
+  not create a link.
+- An unterminated quote in an input CSV is not an error on Python 3.12 and 3.13. The rest of the
+  file becomes one identifier and the run exits 1, not 2, although the exit 2 message names an
+  unterminated quote as a cause.
+- The report goes to standard output with `print`, so a closed output pipe can end the run with
+  a traceback and exit 1.
+- The 100% branch figure excludes the `if __name__ == "__main__"` line and the `sys.exit(main())`
+  line under it, with a `# pragma: no cover`. The self-test runs the file as the program, so the
+  import arm of that `if` cannot be taken.
 - Nothing is written without `--apply`, and a refused run writes nothing at all.
 - It opens no socket and imports no network module, so there is no credential anywhere in it to
   leak. The self-test checks the import statements in its own source for the common network
