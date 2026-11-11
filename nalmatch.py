@@ -29,7 +29,8 @@ would give two distinct parcels the same key.
 Nothing is written without --apply.
 
 Exit codes: 0 everything reconciles, 1 something did not reconcile, 2 a file
-could not be read, 3 the identifier rule was refused, 64 usage error.
+could not be read or both files held no records, 3 the identifier rule was
+refused, 64 usage error (a bad flag included).
 """
 
 from __future__ import print_function
@@ -95,10 +96,16 @@ REASON_TEXT = {
 
 DIGITS = "0123456789"
 
+# Case folding touches a to z and nothing else. str.upper() would also fold
+# non-ASCII letters (and turn one German letter into two), and this tool
+# matches a non-ASCII identifier verbatim.
+ASCII_UPPER = {ord(c): ord(c.upper()) for c in "abcdefghijklmnopqrstuvwxyz"}
+
 # Verdicts.
 RECONCILES = "RECONCILES"
 DOES_NOT = "DOES NOT RECONCILE"
 REFUSED = "REFUSED"
+NOTHING = "NOTHING TO COMPARE"
 
 
 def is_digits(text):
@@ -226,6 +233,10 @@ class Result(object):
     def verdict(self):
         if self.refused:
             return REFUSED
+        if not self.gis and not self.roll:
+            # Two empty sides compared nothing. An all-clear here is the same
+            # false clean as a join over an export that failed on both ends.
+            return NOTHING
         if self.gis_only or self.roll_only or self.duplicates or self.rejected:
             return DOES_NOT
         return RECONCILES
@@ -261,7 +272,7 @@ def normalise(raw, rules, width=0):
             text.encode("ascii")
         except UnicodeEncodeError:
             return None, NON_ASCII
-    key = text.upper() if rules.fold_case else text
+    key = text.translate(ASCII_UPPER) if rules.fold_case else text
     if rules.strip_punctuation:
         key = "".join(c for c in key if c not in PUNCTUATION)
         if not key:
@@ -530,15 +541,46 @@ def read_csv_rows(path):
     reading it as plain utf-8 names the first field PARCEL_ID with an invisible
     character in front of it, which then matches no --gis-id-field anybody
     types.
+
+    Decoding is strict. errors="replace" would turn every undecodable byte
+    into the same U+FFFD, so two identifiers that differ only in such a byte
+    would become one key and the collision guard would never see them. A file
+    that is not UTF-8 is refused and named instead (exit 2).
     """
-    with open(path, "r", newline="", encoding="utf-8-sig",
-              errors="replace") as fh:
-        reader = csv.DictReader(fh)
-        fields = list(reader.fieldnames or [])
-        rows = [dict(row) for row in reader]
+    try:
+        with open(path, "r", newline="", encoding="utf-8-sig") as fh:
+            reader = csv.DictReader(fh)
+            fields = list(reader.fieldnames or [])
+            rows = [dict(row) for row in reader]
+    except UnicodeDecodeError as exc:
+        raise ValueError("%s is not valid UTF-8 (byte 0x%02x at offset %d). "
+                         "Save it as CSV UTF-8 and run again."
+                         % (path, exc.object[exc.start], exc.start))
+    except csv.Error as exc:
+        raise ValueError("%s is not a CSV this tool can parse (%s). Check for "
+                         "an unterminated quote, a NUL byte, or a cell longer "
+                         "than %d characters."
+                         % (path, exc, csv.field_size_limit()))
     if not fields:
         raise ValueError("%s has no header row" % path)
     return fields, rows
+
+
+def printable(text, stream):
+    """text with every character the stream cannot encode shown as an escape.
+
+    Windows encodes redirected output with the ANSI code page, and an
+    identifier outside it would otherwise end the run with a traceback and
+    exit 1, which reads as DOES NOT RECONCILE.
+    """
+    encoding = getattr(stream, "encoding", None) or "utf-8"
+    return text.encode(encoding, "backslashreplace").decode(encoding)
+
+
+def say(text, err=False):
+    """Print one line to stdout, or to stderr, without ever failing to encode."""
+    stream = sys.stderr if err else sys.stdout
+    print(printable(text, stream), file=stream)
 
 
 def column(rows, field):
@@ -611,6 +653,14 @@ def build_rules(args):
     if args.non_ascii is not None:
         rules = rules.replace(ascii_only=args.non_ascii == "reject")
     return rules
+
+
+# An import statement of a module that can reach a network. A dynamic
+# __import__ or importlib call is not looked for.
+NETWORK_IMPORT = re.compile(
+    r"^\s*(?:import\s+[^#\n]*\b|from\s+)"
+    r"(?:urllib|socket|socketserver|http|ftplib|smtplib|ssl|telnetlib|xmlrpc"
+    r"|requests|httpx)\b", re.M)
 
 
 # ------------------------------------------------------------------ self-test
@@ -862,8 +912,14 @@ def self_test():
           "and kept verbatim when the profile allows it, never transliterated"
           "  <-- pinned defect")
     check(key_of(u"12345\u00f1", fl.replace(ascii_only=False))
-          == u"12345\u00d1",
-          "case folding still applies to it")
+          == u"12345\u00f1",
+          "and a non-ASCII letter is not case folded either: verbatim means "
+          "verbatim  <-- pinned defect")
+    check(key_of(u"ab\u00e9", generic) == u"AB\u00e9",
+          "while the ASCII letters beside it still are")
+    check(key_of(u"\u00df", generic) == u"\u00df",
+          "and one letter never becomes two, which str.upper() would do  "
+          "<-- pinned defect")
     check(reason_of(u"\uff11\uff12\uff13") == NON_ASCII,
           "full width digits are non-ASCII, whatever str.isdigit says about "
           "them  <-- pinned defect")
@@ -1093,11 +1149,14 @@ def self_test():
 
     # ---- empty sides
     r = reconcile([], [], fl)
-    check(r.verdict == RECONCILES,
-          "two empty sides reconcile: there is nothing that failed to match")
+    check(r.verdict == NOTHING and r.verdict != RECONCILES,
+          "two empty sides compared nothing, so they are not an all-clear  "
+          "<-- pinned defect")
     check(r.matched == 0 and r.width == 0,
           "with nothing matched and no width to pad to")
-    check(describe(r)[-1] == "VERDICT: RECONCILES", "and the report says so")
+    check(describe(r)[-1] == "VERDICT: NOTHING TO COMPARE",
+          "and the report says so")
+    check(as_json(r)["verdict"] == NOTHING, "and so does the json")
     r = reconcile(["12345"], [], fl)
     check(r.verdict == DOES_NOT and len(r.gis_only) == 1,
           "an empty roll leaves every parcel unmatched")
@@ -1349,8 +1408,37 @@ def self_test():
               "name  <-- pinned defect")
         latin = os.path.join(tmp, "latin.csv")
         write(latin, b"PARCEL_ID\n123\xe9\n")
-        check(len(read_csv_rows(latin)[1]) == 1,
-              "a byte that is not UTF-8 is replaced, not fatal")
+        raises(lambda: read_csv_rows(latin),
+               "a byte that is not UTF-8 is refused by the reader, not "
+               "replaced with U+FFFD  <-- pinned defect")
+        rc, out = capture(lambda: main([latin, latin]))
+        check(rc == 2 and "not valid UTF-8" in out and "0xe9" in out
+              and "CSV UTF-8" in out,
+              "and the run exits 2 naming the byte and the way out")
+        latin_a = os.path.join(tmp, "latin-a.csv")
+        write(latin_a, b"PARCEL_ID\r\nA\xe9-1\r\n")
+        latin_b = os.path.join(tmp, "latin-b.csv")
+        write(latin_b, b"PARCEL_ID\r\nA\xe8-1\r\n")
+        rc, out = capture(lambda: main([latin_a, latin_b, "--profile",
+                                        "generic"]))
+        check(rc == 2,
+              "two identifiers that differ only in an undecodable byte are "
+              "not read as one key and reconciled  <-- pinned defect")
+        big = os.path.join(tmp, "big.csv")
+        write(big, b"PARCEL_ID\n" + b"1" * 200000 + b"\n")
+        rc, out = capture(lambda: main([big, big]))
+        check(rc == 2 and "not a CSV this tool can parse" in out,
+              "a cell past the csv module's size limit exits 2 with a "
+              "message, not a traceback and exit 1  <-- pinned defect")
+        quote = os.path.join(tmp, "quote.csv")
+        write(quote, b'PARCEL_ID\n"1\n2\n3\n')
+        check(read_csv_rows(quote)[1] == [{"PARCEL_ID": "1\n2\n3\n"}],
+              "an unterminated quote swallows the rest of the file into one "
+              "cell, which is Python's csv behaviour and is not warned about")
+        dup_header = os.path.join(tmp, "dup-header.csv")
+        write(dup_header, b"PARCEL_ID,PARCEL_ID\nA,B\n")
+        check(column(read_csv_rows(dup_header)[1], "PARCEL_ID") == ["B"],
+              "a duplicate header name is read with the last column winning")
         # A row with fewer cells than the header is how a real None reaches
         # the core: csv fills the missing trailing fields with None.
         ragged = os.path.join(tmp, "ragged.csv")
@@ -1578,6 +1666,18 @@ def self_test():
         check(csv_rows([("gis", "x", -5, None, 7)])[1]
               == ["gis", "x", -5, None, 7],
               "and a numeric cell in a row is not stringified or prefixed")
+        check(cell("  =1+1") == "  =1+1" and cell(chr(10) + "=1") == chr(10)
+              + "=1" and cell(chr(0xff1d) + "1") == chr(0xff1d) + "1",
+              "the guard checks the first character as written: a lead after "
+              "a space, a leading line feed and a full width equals are not "
+              "guarded (a documented limit)")
+        check(cell("=1") == cell("'=1") == "'=1",
+              "and it is not lossless in general: '=1 and =1 are both written "
+              "as '=1 (a documented limit)")
+        spaced = csv_rows(exceptions(reconcile(["  =2"], [], generic)))[1]
+        check(spaced[2] == "  =2" and spaced[3] == "'=2",
+              "so a spaced identifier is written raw while its trimmed KEY is "
+              "guarded")
 
         hostile_gis = os.path.join(tmp, "hostile-gis.csv")
         write(hostile_gis, b'PARCEL_ID\n=1+1\n+7\n-8\n@x\n"\tTAB"\n"\rCR"\n'
@@ -1746,9 +1846,136 @@ def self_test():
                                         os.path.join(tmp, "empty.csv")]))
         check(rc == 2, "a CSV with no header row exits 2")
         rc, out = capture(lambda: main([headers_only, headers_only]))
-        check(rc == 0 and "MATCHED   0 key(s)" in out,
-              "two empty tables reconcile, because nothing failed to match")
-        check("VERDICT: RECONCILES" in out, "and say so")
+        check(rc == 2 and "MATCHED   0 key(s)" in out,
+              "two empty tables exit 2, because nothing was compared  "
+              "<-- pinned defect")
+        check("VERDICT: NOTHING TO COMPARE" in out
+              and "VERDICT: RECONCILES" not in out,
+              "and never say RECONCILES")
+        empty_out = os.path.join(tmp, "empty-out.csv")
+        rc, out = capture(lambda: main([headers_only, headers_only,
+                                        "--write-csv", empty_out, "--apply"]))
+        check(rc == 2 and not os.path.exists(empty_out),
+              "and write no exception file, even with --apply")
+        rc, out = capture(lambda: main([headers_only, roll_csv]))
+        check(rc == 1 and "ROLL ONLY 4" in out,
+              "while one empty side is reported as the finding it is")
+
+        # ---- output that the console code page cannot encode
+        def run_split(argv, stdout=None):
+            """(rc, stdout text, stderr text), the two streams kept apart."""
+            out, err = io.StringIO(), io.StringIO()
+            real_out, real_err = sys.stdout, sys.stderr
+            sys.stdout, sys.stderr = stdout or out, err
+            try:
+                rc = main(argv)
+            finally:
+                sys.stdout, sys.stderr = real_out, real_err
+            return rc, out.getvalue(), err.getvalue()
+
+        hyphen_gis = os.path.join(tmp, "nb-gis.csv")
+        write(hyphen_gis, ("PARCEL_ID\n12" + chr(0x2011) + "3\n")
+              .encode("utf-8"))
+        one_roll = os.path.join(tmp, "nb-roll.csv")
+        write(one_roll, b"PARCEL_ID\n12\n")
+        raw_out = io.BytesIO()
+        ansi = io.TextIOWrapper(raw_out, encoding="cp1252", newline="\n")
+        rc, _, _ = run_split([hyphen_gis, one_roll], stdout=ansi)
+        ansi.flush()
+        check(rc == 1 and b"12\\u20113" in raw_out.getvalue(),
+              "an identifier the console code page cannot encode is shown as "
+              "an escape, not a UnicodeEncodeError and exit 1  "
+              "<-- pinned defect")
+        check(printable(chr(0xfffd), ansi) == "\\ufffd"
+              and printable("abc", io.StringIO()) == "abc",
+              "and printable() leaves everything the stream can encode alone")
+
+        # ---- --json keeps stdout one document
+        json_csv = os.path.join(tmp, "json-out.csv")
+        rc, out, err = run_split([parcels_csv, roll_csv, "--json",
+                                  "--write-csv", json_csv])
+        check(rc == 1 and json.loads(out)["verdict"] == DOES_NOT
+              and "would write" in err and not os.path.exists(json_csv),
+              "--json with --write-csv leaves stdout as one JSON document and "
+              "sends the status line to stderr  <-- pinned defect")
+        rc, out, err = run_split([parcels_csv, roll_csv, "--json",
+                                  "--write-csv", json_csv, "--apply"])
+        check(rc == 1 and json.loads(out)["verdict"] == DOES_NOT
+              and "wrote" in err and os.path.exists(json_csv),
+              "and so does --apply, which still writes the file  "
+              "<-- pinned defect")
+
+        # ---- claims the README makes about what matches
+        space_gis = os.path.join(tmp, "space-gis.csv")
+        write(space_gis, b"PARCEL_ID\n12 34\n")
+        space_roll = os.path.join(tmp, "space-roll.csv")
+        write(space_roll, b"PARCEL_ID\n1234\n")
+        rc, out = capture(lambda: main([space_gis, space_roll]))
+        check(rc == 0 and "MATCHED   1 key(s)" in out,
+              "a space is one of the separators florida-nal strips, as the "
+              "README says  <-- pinned defect")
+        rc, out = capture(lambda: main([space_gis, space_roll,
+                                        "--punctuation", "keep"]))
+        check(rc == 1, "and --punctuation keep leaves it in")
+        remap_gis = os.path.join(tmp, "remap-gis.csv")
+        write(remap_gis, b"PARCEL_ID\n12345#001\n")
+        remap_roll = os.path.join(tmp, "remap-roll.csv")
+        write(remap_roll, b"PARCEL_ID\n12345001\n")
+        rc, out = capture(lambda: main([remap_gis, remap_roll]))
+        check(rc == 1 and "MATCHED   0" in out and "GIS ONLY  1" in out
+              and "ROLL ONLY 1" in out,
+              "12345#001 does not match 12345001: it shows under GIS ONLY and "
+              "ROLL ONLY, with no crosswalk")
+        case_a = os.path.join(tmp, "case-a.csv")
+        write(case_a, ("PARCEL_ID\nA" + chr(0xe9) + "\n").encode("utf-8"))
+        case_b = os.path.join(tmp, "case-b.csv")
+        write(case_b, ("PARCEL_ID\nA" + chr(0xc9) + "\n").encode("utf-8"))
+        rc, out = capture(lambda: main([case_a, case_b, "--non-ascii",
+                                        "allow"]))
+        check(rc == 1 and "MATCHED   0" in out,
+              "--non-ascii allow matches verbatim: a lower case and an upper "
+              "case accented letter are two identifiers  <-- pinned defect")
+        escape_gis = os.path.join(tmp, "escape-gis.csv")
+        write(escape_gis, b"PARCEL_ID\n\x1b[31mX\n")
+        rc, out = capture(lambda: main([escape_gis, one_roll, "--profile",
+                                        "generic"]))
+        check(chr(27) + "[31mX" in out,
+              "an identifier holding a terminal escape is printed as it came")
+
+        # ---- what --write-csv writes, and when it does not
+        bom_gis = os.path.join(tmp, "bom-out-gis.csv")
+        write(bom_gis, ("PARCEL_ID\nA" + chr(0xe9) + "\n").encode("utf-8"))
+        bom_out = os.path.join(tmp, "bom-out.csv")
+        rc, out = capture(lambda: main([bom_gis, one_roll, "--non-ascii",
+                                        "allow", "--write-csv", bom_out,
+                                        "--apply"]))
+        with open(bom_out, "rb") as fh:
+            written_bytes = fh.read()
+        check(not written_bytes.startswith(b"\xef\xbb\xbf")
+              and ("A" + chr(0xe9)).encode("utf-8") in written_bytes,
+              "the exception CSV is UTF-8 with no byte order mark")
+        stale = os.path.join(tmp, "stale.csv")
+        write(stale, b"old rows\n")
+        merge_gis = os.path.join(tmp, "merge-gis.csv")
+        write(merge_gis, b"PARCEL_ID\n0123456\n123456\n")
+        rc, out = capture(lambda: main([merge_gis, one_roll, "--write-csv",
+                                        stale, "--apply"]))
+        with open(stale, "rb") as fh:
+            stale_bytes = fh.read()
+        check(rc == 3 and stale_bytes == b"old rows\n"
+              and "wrote" not in out and "would write" not in out,
+              "a refused run with --apply leaves an existing exception CSV "
+              "untouched and prints no message about it")
+        clobber = os.path.join(tmp, "clobber.csv")
+        with open(parcels_csv, "rb") as src:
+            write(clobber, src.read())
+        rc, out = capture(lambda: main([clobber, roll_csv, "--write-csv",
+                                        clobber, "--apply"]))
+        with open(clobber, "rb") as fh:
+            clobber_head = fh.read(11)
+        check(rc == 1 and clobber_head == b"SIDE,CLASS,",
+              "--write-csv naming an input with --apply overwrites that input "
+              "(a documented limit)")
 
         # ---- usage
         rc, out = capture(lambda: main([]))
@@ -1864,28 +2091,55 @@ def self_test():
     # ---- nothing here opens a socket, and the source says so
     with open(os.path.abspath(__file__), "r", encoding="utf-8") as fh:
         source = fh.read()
-    check(re.search(r"^\s*import\s+(urllib|socket|http|ftplib|requests)",
-                    source, re.M) is None,
+    check(NETWORK_IMPORT.search(source) is None,
           "nalmatch imports no network module: there is no upload path to "
           "audit, and no credential for one to carry")
+    for hostile_import in ("import socket", "import os, socket",
+                           "from urllib.request import urlopen",
+                           "    from http.client import HTTPSConnection",
+                           "import urllib.request as u"):
+        check(NETWORK_IMPORT.search("import os\n%s\nimport json\n"
+                                    % hostile_import) is not None,
+              "the check sees '%s', so an upload path cannot be added past it"
+              "  <-- pinned defect" % hostile_import.strip())
+    check(NETWORK_IMPORT.search("import os\nfrom sockets_are_fun import x\n"
+                                "# import socket\nimport json\n") is None,
+          "and does not fire on a longer module name or a comment")
     check(re.search(r"^\s*(def|class)\s", source, re.M) is not None,
           "and that search really was run over this file's own source")
 
     # ---- the write flag is reached only by its full spelling
     # argparse would take --ap as --apply. A prefix that lands on the write
     # flag must be refused, and the parser exits 2 without writing.
-    stderr = sys.stderr
-    sys.stderr = io.StringIO()
-    exit_code = None
-    try:
-        _parse(["a", "b", "--ap"])
-    except SystemExit as exc:
-        exit_code = exc.code
-    finally:
-        sys.stderr = stderr
-    check(exit_code == 2,
+    def exit_of(argv):
+        """The exit code of a run that ends in SystemExit, else None."""
+        real_out, real_err = sys.stdout, sys.stderr
+        sys.stdout = sys.stderr = io.StringIO()
+        try:
+            main(argv)
+        except SystemExit as exc:
+            return exc.code
+        finally:
+            sys.stdout, sys.stderr = real_out, real_err
+        return None
+
+    never = os.path.join(tempfile.gettempdir(),
+                         "nalmatch-prefix-%d.csv" % os.getpid())
+    check(exit_of(["a", "b", "--write-csv", never, "--ap"]) == 64,
           "a unique prefix of --apply is refused by the parser, not read as "
           "the write flag  <-- pinned defect")
+    check(not os.path.exists(never), "and nothing is written")
+    check(exit_of(["a", "b", "--bogus"]) == 64,
+          "an unknown flag exits 64, the usage code the README gives, and "
+          "not argparse's 2  <-- pinned defect")
+    check(exit_of(["a", "b", "--sample", "x"]) == 64
+          and exit_of(["a", "b", "--max-len", "x"]) == 64
+          and exit_of(["a", "b", "--case", "nope"]) == 64,
+          "so does a flag value of the wrong kind")
+    check(exit_of(["--help"]) == 0, "and --help still exits 0")
+    check(exit_of(["--self-test", "--json"]) is None,
+          "while a run that returns a code instead of exiting reports no "
+          "SystemExit")
 
     # ---- the footer reports a failure as loudly as a pass
     check(_summary(3, []) == (["3 assertions, 0 failed"], 0),
@@ -1911,8 +2165,16 @@ def _summary(total, failed):
 
 # ----------------------------------------------------------------------- cli
 
+class Parser(argparse.ArgumentParser):
+    """argparse, with its usage error on the exit code this tool documents."""
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        self.exit(64, "%s: error: %s\n" % (self.prog, message))
+
+
 def _parse(argv):
-    ap = argparse.ArgumentParser(
+    ap = Parser(
         prog="nalmatch.py",
         description="Reconcile a GIS parcel layer against the tax roll and "
                     "name every parcel that exists on one side only.",
@@ -2013,10 +2275,10 @@ def main(argv=None):
         gis_ids, _ = _ids(args.gis, args.gis_id_field, "--gis-id-field")
         roll_ids, _ = _ids(args.roll, args.roll_id_field, "--roll-id-field")
     except (OSError, IOError, ValueError) as exc:
-        print("error: could not read: %s" % exc, file=sys.stderr)
+        say("error: could not read: %s" % exc, err=True)
         return 2
     except LookupError as exc:
-        print("error: %s" % exc, file=sys.stderr)
+        say("error: %s" % exc, err=True)
         return 64
 
     result = reconcile(gis_ids, roll_ids, rules)
@@ -2025,11 +2287,11 @@ def main(argv=None):
         print(json.dumps(as_json(result, args.sample), indent=2,
                          sort_keys=True))
     else:
-        print("nalmatch: %s %d record(s), %s %d record(s)"
-              % (args.gis, len(result.gis), args.roll, len(result.roll)))
-        print("")
+        say("nalmatch: %s %d record(s), %s %d record(s)"
+            % (args.gis, len(result.gis), args.roll, len(result.roll)))
+        say("")
         for line in describe(result, args.sample):
-            print(line)
+            say(line)
 
     if result.refused:
         # The exception rows were computed under a rule this tool has already
@@ -2037,20 +2299,28 @@ def main(argv=None):
         # loads later, which is the failure this whole tool exists to stop.
         return 3
 
+    if result.verdict == NOTHING:
+        say("error: both files have a header and no records, so nothing was "
+            "compared. Re-export them.", err=True)
+        return 2
+
     if args.write_csv:
+        # With --json the status line goes to stderr, so stdout stays one
+        # JSON document.
         rows = len(exceptions(result))
         if not args.apply:
-            print("would write %d exception row(s) to %s, and nothing was "
-                  "written. Add --apply." % (rows, args.write_csv))
+            say("would write %d exception row(s) to %s, and nothing was "
+                "written. Add --apply." % (rows, args.write_csv),
+                err=args.json)
         else:
             try:
                 written = write_exceptions(args.write_csv, result)
             except (OSError, IOError) as exc:
-                print("error: could not write %s: %s"
-                      % (args.write_csv, exc), file=sys.stderr)
+                say("error: could not write %s: %s" % (args.write_csv, exc),
+                    err=True)
                 return 2
-            print("wrote %d exception row(s) to %s"
-                  % (written, args.write_csv))
+            say("wrote %d exception row(s) to %s" % (written, args.write_csv),
+                err=args.json)
 
     return 0 if result.verdict == RECONCILES else 1
 
