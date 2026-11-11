@@ -11,82 +11,94 @@ identifier, found nothing for any of those 312 lots, and finished.
 Nobody noticed, because the join succeeded. It matched 900 parcels out of 1212 and reported no
 error, and 900 matched rows look exactly like a healthy night. The 312 were missing from the
 output rather than wrong in it, and nothing counts what is missing. The call came from a title
-company nine months later.
+company nine months later. The story is illustrative: its figures cannot be
+checked from this repository, and the self-test pins only the 312 lot count and the padding
+arithmetic.
 
 ```
 $ python nalmatch.py --self-test
 nalmatch self-test: no network, no database, a temporary directory for the io layer
 --------------------------------------------------------------------
+PASS  the default profile is the Florida one, which is what every assertion below is written against
+PASS  the default column is the one the Department of Revenue extract uses  <-- pinned defect
 PASS  ten records are listed under each class by default  <-- pinned defect
+PASS  two profiles ship
+PASS  florida-nal folds case, strips punctuation and refuses non-ASCII
+PASS  and pads numbers to the widest one it was given
+PASS  with a 26 character ceiling
 PASS  check digit stripping is OFF by default: it deletes a character from every identifier  <-- pinned defect
+PASS  generic folds case, because a lower case identifier is the same identifier
 PASS  and does NOTHING else: every rule that can merge two parcels has to be asked for  <-- pinned defect
-PASS  the roll identifier that lost its leading zeros in a spreadsheet still matches  <-- pinned defect
-PASS  punctuation and lost leading zeros together, which is the join in the story  <-- pinned defect
-PASS  an identifier one digit short does not match: padding makes it 01234500100, not the original  <-- pinned defect
-PASS  two numbers of the same width are never brought together by padding  <-- pinned defect
-PASS  nor a 19 digit identifier from another county's scheme, which is rejected rather than truncated  <-- pinned defect
-PASS  and the same 19 digit identifier on BOTH sides still does not match, because neither side made a key  <-- pinned defect
-PASS  letter O typed for digit zero does not match, and is not guessed at  <-- pinned defect
-PASS  an en dash is not a hyphen: the profile refuses it as non-ASCII rather than treating it as a separator  <-- pinned defect
-PASS  full width digits are refused, not folded into ASCII ones  <-- pinned defect
-PASS  a number already wider than the width is left alone, never cut  <-- pinned defect
-PASS  a key with a letter in it is NOT padded: a lettered identifier is not a number with zeros missing  <-- pinned defect
-PASS  an explicit width wider than the profile ceiling still pads to it: the ceiling measures the identifier that arrived, and padding is the repair applied after it  <-- pinned defect
-PASS  an entry that carries a key AND a refusal reason sets no width: pad_width trusts the reason, not the key  <-- pinned defect
-PASS  the ceiling is checked BEFORE the check digit is stripped, so a foreign identifier cannot be trimmed into profile  <-- pinned defect
-PASS  a superscript two is not a number here either  <-- pinned defect
-PASS  an identifier that arrived as an int is refused: the leading zeros are already gone and padding would invent them  <-- pinned defect
-PASS  a NaN is refused as a number rather than compared, because NaN is not equal to itself and would match nothing  <-- pinned defect
-PASS  a one million character cell is refused by the ceiling rather than padded, sliced or crashed on  <-- pinned defect
-PASS  a trailing non-breaking space is trimmed like any other whitespace, so it never reaches the ASCII test  <-- pinned defect
-PASS  and so is a lone surrogate, rather than raising on the encode  <-- pinned defect
-PASS  two parcels that differ only by a leading zero make the padding rule REFUSE  <-- pinned defect
-PASS  and BOTH originals are named, because either one could be the parcel the roll meant  <-- pinned defect
-PASS  a match count exists internally, and describe() refuses to print it  <-- pinned defect
-PASS  nor any of the four classes, which would all be wrong  <-- pinned defect
-PASS  with padding off the same two parcels keep different keys and nothing is refused  <-- pinned defect
-PASS  case folding merges two rows whose identifiers really did differ, and that is still a refusal  <-- pinned defect
-PASS  a collision on the ROLL side is refused too: the merge is just as wrong in that direction  <-- pinned defect
-PASS  the same identifier written twice is a duplicate, not a merge, so the run is not refused  <-- pinned defect
-PASS  a missing cell shows as empty, never as the word None  <-- pinned defect
-PASS  and the word None appears nowhere in the report  <-- pinned defect
-PASS  all 312 reconcile once the lost zero is padded back  <-- pinned defect
-PASS  and with padding off NOT ONE of them matches, which is the join that succeeded  <-- pinned defect
-PASS  a rejected 19 digit identifier does not set the padding width for the rest of the file  <-- pinned defect
-PASS  a rejected identifier is not ALSO reported as unmatched: it is one finding, not two  <-- pinned defect
+PASS  profiles() hands back a fresh copy, so one run cannot edit the rule another run gets
+PASS  replace() copies rather than editing in place
+PASS  a rule reprs as its name
+PASS  replacing a rule that does not exist raises rather than being silently ignored  <-- pinned defect
 ...
-PASS  check() and raises() really do record a failure  <-- pinned defect
-PASS  a byte order mark does not become part of the first field name  <-- pinned defect
+PASS  two parcels that differ only by a leading zero make the padding rule REFUSE  <-- pinned defect
+PASS  and the verdict is REFUSED
+PASS  one key is contested
+PASS  named as the key they share
+PASS  and BOTH originals are named, because either one could be the parcel the roll meant  <-- pinned defect
+PASS  the side is named too
+PASS  a collision reprs as its side, its key and its size
+PASS  a match count exists internally, and describe() refuses to print it  <-- pinned defect
+PASS  the report says REFUSED
+PASS  and prints no match count under a merging rule  <-- pinned defect
+PASS  nor any of the four classes, which would all be wrong  <-- pinned defect
+PASS  it prints both originals instead
+PASS  and says what to do about it
+PASS  the json carries the refusal
+PASS  naming both identifiers in the order the file had them
+PASS  under the key this rule gave them both
+PASS  and no match count, no class list and no counts at all, so a script that skips the verdict cannot read an empty list as none found  <-- pinned defect
+...
+PASS  each nine characters wide with a leading zero
+PASS  and eight wide after a spreadsheet read them as numbers
+PASS  all 312 reconcile once the lost zero is padded back  <-- pinned defect
+PASS  so the whole subdivision reconciles
+PASS  and with padding off NOT ONE of them matches, which is the join that succeeded  <-- pinned defect
+PASS  every parcel is reported on one side only
+...
+PASS  and that missing cell is rejected rather than crashing the run
 PASS  with the word None printed nowhere  <-- pinned defect
-PASS  three parcels reconcile through the padding rule, read off disk  <-- pinned defect
-PASS  and NOTHING matches, which is the join in the story  <-- pinned defect
-PASS  without it the default column is missing and that is a usage error, not an empty report  <-- pinned defect
-PASS  --write-csv alone writes NOTHING  <-- pinned defect
-PASS  and says how many rows went into it, which is the only count the operator sees about the write  <-- pinned defect
-PASS  --apply over an existing file replaces it: the authorisation is the flag  <-- pinned defect
-PASS  and not one stale row survives the rewrite  <-- pinned defect
-PASS  and writes NOTHING, because the rule that made those rows merges parcels  <-- pinned defect
-PASS  and when BOTH spellings are in the layer, stripping the check digit merges two records and the run is refused  <-- pinned defect
+PASS  a blank line between records in a one column file is a record with an empty identifier, not a line the reader drops  <-- pinned defect
+PASS  so the run rejects it and does not reconcile, instead of exit 0 over a record it lost  <-- pinned defect
+PASS  blank lines at the end of the file are not records
 ...
 PASS  the identifier column guards a leading equals with one apostrophe and changes no other cell  <-- pinned defect
+PASS  the identifier column guards a leading plus with one apostrophe and changes no other cell  <-- pinned defect
+PASS  the identifier column guards a leading minus with one apostrophe and changes no other cell  <-- pinned defect
+PASS  the identifier column guards a leading at sign with one apostrophe and changes no other cell  <-- pinned defect
 PASS  the identifier column guards a leading tab with one apostrophe and changes no other cell  <-- pinned defect
 PASS  the identifier column guards a leading carriage return with one apostrophe and changes no other cell  <-- pinned defect
 PASS  the key column guards a leading equals with one apostrophe and changes no other cell  <-- pinned defect
+PASS  the key column guards a leading plus with one apostrophe and changes no other cell  <-- pinned defect
+PASS  the key column guards a leading minus with one apostrophe and changes no other cell  <-- pinned defect
+PASS  the key column guards a leading at sign with one apostrophe and changes no other cell  <-- pinned defect
+PASS  the key column guards a leading tab with one apostrophe and changes no other cell  <-- pinned defect
+PASS  the key column guards a leading carriage return with one apostrophe and changes no other cell  <-- pinned defect
 PASS  the detail column guards a leading equals with one apostrophe and changes no other cell  <-- pinned defect
-PASS  a number or None passes through unchanged, so a numeric column stays numeric  <-- pinned defect
-PASS  every hostile identifier reaches the file with one apostrophe in front  <-- pinned defect
-PASS  dropping that one apostrophe gives the input identifier back for every identifier that did not start with an apostrophe, which is the round trip a reader of the file would apply
-PASS  an identifier with a hyphen inside it is written exactly as read, with no apostrophe
-PASS  but the run refuses an identifier column named twice: exit 2, not RECONCILES over the column csv kept  <-- pinned defect
+PASS  the detail column guards a leading plus with one apostrophe and changes no other cell  <-- pinned defect
+PASS  the detail column guards a leading minus with one apostrophe and changes no other cell  <-- pinned defect
 ...
-PASS  and every rule override defaults to 'whatever the profile says'  <-- pinned defect
-PASS  nalmatch imports no network module: there is no upload path to audit, and no credential for one to carry
+PASS  so a spaced identifier is written raw while its trimmed KEY is guarded
+PASS  a file of hostile identifiers is reported and written
+PASS  every hostile identifier reaches the file with one apostrophe in front  <-- pinned defect
+PASS  and so does a KEY that starts with = + or -  <-- pinned defect
+PASS  so no IDENTIFIER or KEY cell in the file starts with a trigger  <-- pinned defect
+...
+PASS  and does not fire on a longer module name or a comment
+PASS  and that search really was run over this file's own source
 PASS  a unique prefix of --apply is refused by the parser, not read as the write flag  <-- pinned defect
+PASS  and nothing is written
+PASS  an unknown flag exits 64, the usage code the README gives, and not argparse's 2  <-- pinned defect
+PASS  so does a flag value of the wrong kind
+PASS  and --help still exits 0
+PASS  while a run that returns a code instead of exiting reports no SystemExit
 PASS  the footer of a green run is the count and 0 failed
 PASS  the footer of a red run names every failed assertion and returns 1
 --------------------------------------------------------------------
-488 assertions, 0 failed
-
+494 assertions, 0 failed
 ```
 
 ## Requirements
@@ -95,14 +107,16 @@ Python 3.9 or newer and nothing else. No `arcpy`, no third-party package, no net
 database. Both sides are CSVs, which is what every parcel layer and every roll extract can be
 exported as.
 
-The self-test runs 488 assertions and the count is the same on every interpreter it was run on:
+The self-test runs 494 assertions and the count is the same on every interpreter it was run on:
 Windows CPython 3.9.25, 3.12.10 and 3.13.2, ArcGIS Pro's own interpreter (3.13.7), and Ubuntu
 CPython 3.12.3. There is no unavoidable difference between hosts. Measured with
 `coverage run --branch nalmatch.py --self-test` (coverage 7.16.1), branch coverage is 100%
-(1147 statements, 176 branches, 0 missed). The one line the self-test cannot reach is
-`sys.exit(main())` under `if __name__ == "__main__"`, which runs only when the file is the
-program and is marked `# pragma: no cover`. The exit codes it forwards are asserted through
-`main()` directly.
+(1172 statements, 180 branches, 0 missed). That figure depends on one `# pragma: no cover` on
+the `if __name__ == "__main__"` line. Running the file as a program does execute
+`sys.exit(main())`. What cannot be reached is the other arc of that `if`, the one taken when
+the file is imported, because the self-test runs the file as the program. Without the pragma,
+the same run reports 1174 statements, 182 branches, one partial branch and 99%. The exit codes
+`main()` forwards are asserted through `main()` directly.
 
 ```
 git clone https://github.com/uhsear/nalmatch.git
@@ -155,7 +169,7 @@ The two profiles:
 | Strip `- . _ /` and the space | yes | no |
 | Pad numbers with leading zeros | yes, to the widest seen | no |
 | Strip a trailing check digit | no | no |
-| Length ceiling | 18 characters | none |
+| Length ceiling | 26 characters | none |
 | Non-ASCII identifier | rejected | matched verbatim |
 
 `generic` does the least a rule can do: trim the whitespace and fold the case. Every rule that
@@ -175,14 +189,14 @@ OBJECTID,PARCEL_ID                   PARCEL_ID,OWNER
 4,049300120                          49300120,D
 5,049399999                          13000501,E
 6,
-7,1234567890123456789
+7,123456789012345678901234567
 ```
 
 ```
 $ python nalmatch.py parcels.csv nal.csv
 nalmatch: parcels.csv 7 record(s), nal.csv 5 record(s)
 
-KEY RULE  profile florida-nal, fold case, strip punctuation, pad numbers to 9, ceiling 18 characters, reject non-ASCII
+KEY RULE  profile florida-nal, fold case, strip punctuation, pad numbers to 9, ceiling 26 characters, reject non-ASCII
 MATCHED   4 key(s) on both sides
 GIS ONLY  1 parcel(s) with no roll record
       049399999  ->  049399999
@@ -191,7 +205,7 @@ ROLL ONLY 1 roll record(s) with no parcel
 DUPLICATE 0 key(s) written more than once
 REJECTED  2 identifier(s) this profile will not use
       (empty)  ->  empty once trimmed, so there is no identifier to match on
-      1234567890123456789  ->  longer than this profile allows, so it belongs to a different identifier scheme
+      123456789012345678901234567  ->  longer than this profile allows, so it belongs to a different identifier scheme
 VERDICT: DOES NOT RECONCILE
 ```
 
@@ -201,7 +215,7 @@ The same two files with `--pad off`, which is the join that ran for nine months:
 $ python nalmatch.py parcels.csv nal.csv --pad off
 nalmatch: parcels.csv 7 record(s), nal.csv 5 record(s)
 
-KEY RULE  profile florida-nal, fold case, strip punctuation, no padding, ceiling 18 characters, reject non-ASCII
+KEY RULE  profile florida-nal, fold case, strip punctuation, no padding, ceiling 26 characters, reject non-ASCII
 MATCHED   0 key(s) on both sides
 GIS ONLY  5 parcel(s) with no roll record
       049300117  ->  049300117
@@ -218,7 +232,7 @@ ROLL ONLY 5 roll record(s) with no parcel
 DUPLICATE 0 key(s) written more than once
 REJECTED  2 identifier(s) this profile will not use
       (empty)  ->  empty once trimmed, so there is no identifier to match on
-      1234567890123456789  ->  longer than this profile allows, so it belongs to a different identifier scheme
+      123456789012345678901234567  ->  longer than this profile allows, so it belongs to a different identifier scheme
 VERDICT: DOES NOT RECONCILE
 ```
 
@@ -272,7 +286,7 @@ PARCEL_ID                PARCEL_ID
 $ python nalmatch.py merge.csv small.csv
 nalmatch: merge.csv 2 record(s), small.csv 1 record(s)
 
-KEY RULE  profile florida-nal, fold case, strip punctuation, pad numbers to 7, ceiling 18 characters, reject non-ASCII
+KEY RULE  profile florida-nal, fold case, strip punctuation, pad numbers to 7, ceiling 26 characters, reject non-ASCII
 REFUSED   this rule gives 2 distinct identifier(s) 1 shared key(s)
       gis key 0123456 is claimed by:
           123456
@@ -282,7 +296,8 @@ VERDICT: REFUSED
 ```
 
 The tool names both originals and stops. It does not print a match count, it does not print the
-other three classes, and `--write-csv --apply` writes nothing, because every one of those numbers
+other three classes (`--json` leaves out `matched` and all four class lists for the same
+reason), and `--write-csv --apply` writes nothing, because every one of those numbers
 was computed under a rule that merges two parcels into one. A tool that reported them would be
 publishing an answer it already knows is wrong.
 
@@ -295,9 +310,11 @@ the run could report `RECONCILES` over the wrong column.
 
 Two more things are refused, one identifier at a time rather than for the whole run:
 
-- An identifier longer than the profile's ceiling. A 19 digit identifier in a Florida county's
-  file belongs to a different scheme, and the honest answer is to name it, not to trim it to 18
-  and match it against something.
+- An identifier longer than the profile's ceiling. The Department of Revenue user's guide says
+  `PARCEL_ID` "can contain up to 26 alphanumeric characters", so `florida-nal` refuses anything
+  longer than 26 once the separators are gone. A 27 digit identifier belongs to a different
+  scheme, and the honest answer is to name it, not to trim it to 26 and match it against
+  something. A county whose identifiers run longer than the guide allows passes `--max-len`.
 - An identifier holding a character outside ASCII. An en dash is not a hyphen and a full width
   digit `U+FF11` is not a `1`. Unicode normalisation would fold both into the ASCII key, which is
   a merge by another name. `--non-ascii allow` matches them verbatim instead.
@@ -311,8 +328,8 @@ steps matters:
 2. **Fold case.** `r12345` and `R12345` are one parcel.
 3. **Strip the separators** `- . _ /` and the space. `12345-001-000` and `12345001000` are one
    parcel, and so are `12 345` and `12345`.
-4. **Apply the ceiling.** Measured here, after the separators are gone, so `1234-5678-9012-3456-789`
-   is refused as 19 digits rather than accepted as 23 characters.
+4. **Apply the ceiling.** Measured here, after the separators are gone, so `1234-5678-9012-3456-7890-1234-567`
+   is refused as 27 digits rather than accepted as 33 characters.
 5. **Strip a check digit,** if asked. After the ceiling, so an identifier from another scheme can
    never be trimmed into profile.
 6. **Pad with leading zeros.** Last, so an identifier the profile refused can never set the width
@@ -337,15 +354,15 @@ an identifier.
 
 The Florida tax roll is the Department of Revenue NAL (name, address, legal) and NAP extract,
 one file for each county. The Department's 2025 user's guide names the identifier field
-`PARCEL_ID`, which is this tool's default on both sides. The Department's 2025 submission
-standard says those files are comma-delimited with no header row, so add a header line (for
-example `CO_NO,PARCEL_ID,...`, in the order the user's guide gives for your year) before you
-point nalmatch at one. The field numbering differs between guide years.
+`PARCEL_ID`, which is this tool's default on both sides. The same guide says the Department
+publishes the NAL, NAP and SDF files as comma-delimited files with the field names in the header
+row, so a file downloaded from the Department needs nothing added. Do not add a second header
+line: it would be read as a record. The field numbering differs between guide years.
 
 `PARCEL_ID` is the only field name assumed anywhere. A GIS
 parcel layer rarely agrees with any of them, which is why `--gis-id-field` and `--roll-id-field`
 exist and why naming a column that is not in the file is a usage error that lists the columns
-that are:
+that are (shown for a layer whose identifier column is `PARCELNO`):
 
 ```
 $ python nalmatch.py parcels.csv nal.csv
@@ -353,8 +370,9 @@ error: parcels.csv has no field 'PARCEL_ID'. Name the right one with --gis-id-fi
 ```
 
 The identifier format itself is a county decision, not a state one, so no format is hardcoded.
-The 18 character ceiling in `florida-nal` is a guard against mixing two keyspaces rather than a
-statement about any statute, and `--max-len` changes it.
+The 26 character ceiling in `florida-nal` is the length the Department of Revenue user's guide
+gives for `PARCEL_ID` (see References). It is a guard against mixing two keyspaces, and
+`--max-len` changes it.
 
 ## Exit codes
 
@@ -431,9 +449,24 @@ out what it left out, grouped by reason.
   double count. The exception CSV names it.
 - The guard covers the six leads listed above. OWASP also lists a line feed and full-width
   forms of `=` and `+`. A cell that starts with one of those is written as it came.
-- A lead character that follows a space is not guarded in the IDENTIFIER column, which keeps
-  the raw text. The trimmed KEY column is guarded. Whether a spreadsheet runs such a cell was
-  not tested.
+- A lead character that follows a space or a line feed is not guarded in the IDENTIFIER column,
+  which keeps the raw text, so `  =2` and a line feed followed by `=cmd` are written as they came.
+  The trimmed KEY column is guarded. Whether a spreadsheet runs such a cell was not tested.
+- An identifier saved as a float, such as `49300117.0`, loses its dot under the separator rule and
+  becomes the key `493001170`, which is the key of a different parcel if that parcel exists on
+  the other side.
+- `--pad` accepts any width. A very large value, such as `--pad 99999999999`, zero fills every
+  all-digit key to that length and can exhaust memory. The traceback exits 1, which reads as
+  "did not reconcile".
+- An identifier that holds a line break inside a quoted CSV field is printed as it is, so it can
+  add lines to the text report, including a fake `VERDICT` line above the real one. The real
+  verdict is the last line and the exit code.
+- `--write-csv` with `--apply` opens the path directly and follows a symbolic link, so a link to
+  an input file overwrites that file, as the input file itself does.
+- A roll file saved without a header row is read with its first record as the header, so the run
+  stops with a usage error that lists that record as the column names.
+- `README.md` is committed with CRLF line endings and `nalmatch.py` with LF. This is harmless
+  and inconsistent.
 - Both files must be UTF-8. Anything else is refused with exit 2 and a message naming the byte
   and its offset, rather than decoded with replacement characters.
 - Case folding covers ASCII letters only, so under `--non-ascii allow` an accented letter and
@@ -450,14 +483,16 @@ out what it left out, grouped by reason.
   holds terminal control characters is echoed to the terminal.
 - A cell longer than the `csv` module's 131072 character limit makes the whole file exit 2
   with a message. The one million character check in the self-test is about the identifier rule only.
-- A NUL byte inside an identifier is read as data on Python 3.13 and then matches
-  nothing clean, so it shows up as a mismatch and not as a read error.
-- A line that is completely empty is dropped by the `csv` module, so in a one-column file an
-  empty identifier written as a blank line is neither counted nor reported. Rows with several
-  columns are counted and reported.
+- A NUL byte inside an identifier is read as data on Python 3.12 and 3.13 and then matches
+  nothing clean, so it shows up as a mismatch (exit 1). On Python 3.9 the `csv` module raises
+  `line contains NUL` and the run exits 2. The self-test does not pin this difference.
+- A blank line between two records is read as a record with an empty identifier and rejected,
+  in a file of one column or of several. Blank lines at the end of the file are not records,
+  because an editor often leaves one there.
 - A row with more cells than the header, usually an unquoted comma in an earlier column, is
   read without a warning and shifts the identifier column for that row. The result is a
-  mismatch in the report, not a false match.
+  mismatch in the report. It is not a guarantee: a shifted cell that happens to equal another
+  real identifier can match.
 - `--pad auto` also repairs a one-sided loss: layer `1234` matches roll `001234`. That is the
   repair working as designed, and the limit above covers the case where both sides lost zeros.
 - Nothing is written without `--apply`, and a refused run writes nothing at all.
@@ -480,9 +515,9 @@ out what it left out, grouped by reason.
   a full width digit is a decimal character, so both pass `isdigit()`.
   https://docs.python.org/3/library/stdtypes.html#str.isdigit
 - Florida Department of Revenue, "User's Guide, Department Property Tax Data Files" (NAL, SDF,
-  NAP) and the annual submission standard, which says the roll files carry no header row.
+  NAP), 2025: the published files carry field names in the header row (Intended Users), and
+  Field 2, `PARCEL_ID`, "can contain up to 26 alphanumeric characters".
   https://floridarevenue.com/property/dataportal/Documents/PTO%20Data%20Portal/User%20Guides/2025%20Users%20guide%20and%20quick%20reference/2025_NAL_SDF_NAP_Users_Guide.pdf
-  and https://floridarevenue.com/property/Documents/2025FINALCompSubmStd.pdf
 - Python documentation, `csv`: `csv.writer` writes `None` as the empty string and stringifies
   every other non-string value, and a file passed to it should be opened with `newline=''`.
   https://docs.python.org/3/library/csv.html

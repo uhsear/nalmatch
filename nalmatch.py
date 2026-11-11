@@ -161,7 +161,7 @@ def profiles():
         # refused rather than folded into the county keyspace.
         "florida-nal": Rules(
             "florida-nal", fold_case=True, strip_punctuation=True,
-            pad_to=0, strip_check_digit=False, max_len=18, ascii_only=True),
+            pad_to=0, strip_check_digit=False, max_len=26, ascii_only=True),
         # The least a rule can do: trim and fold case. Everything that could
         # merge two parcels has to be asked for by name.
         "generic": Rules(
@@ -503,18 +503,16 @@ def as_json(result, sample=DEFAULT_SAMPLE):
         "pad_width": result.width,
         "gis_records": len(result.gis),
         "roll_records": len(result.roll),
-        "matched": result.matched,
         "collisions": [{"side": r.side, "key": r.key, "identifiers": r.raws}
                        for r in result.collisions],
-        "duplicates": [],
-        "gis_only": [],
-        "roll_only": [],
-        "rejected": [],
     }
     if result.refused:
-        # Counts computed under a merging rule are not published. The
-        # collisions above are the whole answer.
+        # Nothing computed under a merging rule is published, not the match
+        # count and not the four class lists: an empty list would read as
+        # "none found" to a script that skips the verdict. The collisions
+        # above are the whole answer.
         return doc
+    doc["matched"] = result.matched
     doc["duplicates"] = [{"side": r.side, "key": r.key, "count": len(r.raws),
                           "identifier": r.raws[0]}
                          for r in result.duplicates[:sample]]
@@ -549,9 +547,24 @@ def read_csv_rows(path):
     """
     try:
         with open(path, "r", newline="", encoding="utf-8-sig") as fh:
-            reader = csv.DictReader(fh)
-            fields = list(reader.fieldnames or [])
-            rows = [dict(row) for row in reader]
+            reader = csv.reader(fh)
+            fields = list(next(reader, None) or [])
+            rows = []
+            blank_lines = 0
+            for cells in reader:
+                if not cells:
+                    blank_lines += 1
+                    continue
+                # A blank line between records is a record with no
+                # identifier. csv.DictReader drops it, which in a one column
+                # file loses the record and still reports RECONCILES. A
+                # blank line at the end of the file is not a record.
+                rows.extend({name: "" for name in fields}
+                            for _ in range(blank_lines))
+                blank_lines = 0
+                row = dict(zip(fields, cells))
+                row.update((name, None) for name in fields[len(cells):])
+                rows.append(row)
     except UnicodeDecodeError as exc:
         raise ValueError("%s is not valid UTF-8 (byte 0x%02x at offset %d). "
                          "Save it as CSV UTF-8 and run again."
@@ -727,7 +740,7 @@ def self_test():
     check(fl.strip_punctuation and fl.fold_case and fl.ascii_only,
           "florida-nal folds case, strips punctuation and refuses non-ASCII")
     check(fl.pad_to == 0, "and pads numbers to the widest one it was given")
-    check(fl.max_len == 18, "with an 18 character ceiling")
+    check(fl.max_len == 26, "with a 26 character ceiling")
     check(fl.strip_check_digit is False,
           "check digit stripping is OFF by default: it deletes a character "
           "from every identifier  <-- pinned defect")
@@ -741,7 +754,7 @@ def self_test():
     check(profiles()["florida-nal"] is not fl,
           "profiles() hands back a fresh copy, so one run cannot edit the "
           "rule another run gets")
-    check(fl.replace(max_len=0).max_len == 0 and fl.max_len == 18,
+    check(fl.replace(max_len=0).max_len == 0 and fl.max_len == 26,
           "replace() copies rather than editing in place")
     check(repr(fl) == "Rules(florida-nal)", "a rule reprs as its name")
     raises(lambda: fl.replace(strip_leading_zeros=True),
@@ -799,14 +812,14 @@ def self_test():
          "nor one that is only separators  <-- pinned defect"),
         ("12345001000", None, False,
          "nor a missing cell"),
-        ("12345001000", "1234567890123456789", False,
-         "nor a 19 digit identifier from another county's scheme, which is "
+        ("12345001000", "123456789012345678901234567", False,
+         "nor a 27 digit identifier from another county's scheme, which is "
          "rejected rather than truncated  <-- pinned defect"),
-        ("1234567890123456789", "1234567890123456789", False,
-         "and the same 19 digit identifier on BOTH sides still does not "
+        ("123456789012345678901234567", "123456789012345678901234567", False,
+         "and the same 27 digit identifier on BOTH sides still does not "
          "match, because neither side made a key  <-- pinned defect"),
-        ("123456789012345678", "123456789012345678", True,
-         "18 characters is inside the ceiling and matches"),
+        ("12345678901234567890123456", "12345678901234567890123456", True,
+         "26 characters is inside the ceiling and matches"),
         ("12345-001-000", "12345-001-000-X", False,
          "a trailing check digit is NOT stripped by default, so it does not "
          "match  <-- pinned defect"),
@@ -853,12 +866,12 @@ def self_test():
           "a key with a letter in it is NOT padded: a lettered identifier is "
           "not a number with zeros missing  <-- pinned defect")
     check(key_of("42", fl, width=0) == "42", "a width of zero pads nothing")
-    check(key_of("42", fl, width=25) == "00000000000000000000000" + "42",
+    check(key_of("42", fl, width=30) == "0" * 28 + "42",
           "an explicit width wider than the profile ceiling still pads to it: "
           "the ceiling measures the identifier that arrived, and padding is "
           "the repair applied after it  <-- pinned defect")
-    check(len(key_of("42", fl, width=25)) == 25,
-          "so the key really is 25 characters, not cut back to the 18 "
+    check(len(key_of("42", fl, width=30)) == 30,
+          "so the key really is 30 characters, not cut back to the 26 "
           "character ceiling  <-- pinned defect")
 
     # pad_width fed entries by hand, because the width it returns decides the
@@ -873,7 +886,7 @@ def self_test():
           "number with zeros missing  <-- pinned defect")
     check(pad_width([]) == 0 and pad_width() == 0,
           "and nothing at all is a width of zero")
-    check(pad_width([Entry("1234567890123456789", "1234567890123456789",
+    check(pad_width([Entry("123456789012345678901234567", "123456789012345678901234567",
                            TOO_LONG)]) == 0,
           "an entry that carries a key AND a refusal reason sets no width: "
           "pad_width trusts the reason, not the key  <-- pinned defect")
@@ -886,22 +899,26 @@ def self_test():
           "refused rather than emptied  <-- pinned defect")
     check(key_of("12", fl.replace(strip_check_digit=True)) == "1",
           "two characters is the shortest that can lose one")
-    check(reason_of("1234567890123456789") == TOO_LONG,
-          "19 characters is over the ceiling")
-    check(key_of("1234567890123456789", fl.replace(max_len=0))
-          == "1234567890123456789",
+    check(reason_of("123456789012345678901234567") == TOO_LONG,
+          "27 characters is over the ceiling")
+    check(key_of("123456789012345678901234567", fl.replace(max_len=0))
+          == "123456789012345678901234567",
           "a ceiling of zero means no ceiling, and the key is the identifier "
           "whole  <-- pinned defect")
-    check(key_of("1234567890123456789", generic)
-          == "1234567890123456789",
+    check(key_of("123456789012345678901234567", generic)
+          == "123456789012345678901234567",
           "and generic has none, so the same value is a key there")
-    check(reason_of("1234-5678-9012-3456-789") == TOO_LONG,
+    check(reason_of("1234-5678-9012-3456-7890-1234-567") == TOO_LONG,
           "the ceiling is measured after punctuation is removed, so a dashed "
-          "19 digit identifier is refused too  <-- pinned defect")
-    check(key_of("1234-5678-9012-3456-78") == "123456789012345678",
-          "while 18 digits with the same dashes is accepted, and keys as "
-          "those 18 digits  <-- pinned defect")
-    check(reason_of("1234567890123456789",
+          "27 digit identifier is refused too  <-- pinned defect")
+    check(key_of("49300117.0") == "493001170",
+          "an identifier saved as a float loses its dot with the other "
+          "separators and keys as a different number, which the README lists "
+          "as a limit")
+    check(key_of("1234-5678-9012-3456-7890-1234-56") == "12345678901234567890123456",
+          "while 26 digits with the same dashes is accepted, and keys as "
+          "those 26 digits  <-- pinned defect")
+    check(reason_of("123456789012345678901234567",
                     fl.replace(strip_check_digit=True)) == TOO_LONG,
           "the ceiling is checked BEFORE the check digit is stripped, so a "
           "foreign identifier cannot be trimmed into profile  <-- pinned defect")
@@ -1016,9 +1033,11 @@ def self_test():
           "naming both identifiers in the order the file had them")
     check(doc["collisions"][0]["key"] == "0123456",
           "under the key this rule gave them both")
-    check(doc["gis_only"] == [] and doc["roll_only"] == []
-          and doc["duplicates"] == [] and "counts" not in doc,
-          "and no reconciliation counts at all  <-- pinned defect")
+    check(not any(k in doc for k in ("matched", "gis_only", "roll_only",
+                                     "duplicates", "rejected", "counts")),
+          "and no match count, no class list and no counts at all, so a "
+          "script that skips the verdict cannot read an empty list as none "
+          "found  <-- pinned defect")
 
     check(reconcile(["0123456", "123456"], [], fl.replace(pad_to=None)).refused
           is False,
@@ -1173,9 +1192,9 @@ def self_test():
     check(r.verdict == DOES_NOT, "blank identifiers do not reconcile")
 
     # ---- a rejected identifier cannot change anybody else's key
-    r = reconcile(["00123001000", "1234567890123456789"], ["123001000"], fl)
+    r = reconcile(["00123001000", "123456789012345678901234567"], ["123001000"], fl)
     check(r.width == 11,
-          "a rejected 19 digit identifier does not set the padding width for "
+          "a rejected 27 digit identifier does not set the padding width for "
           "the rest of the file  <-- pinned defect")
     check(r.matched == 1, "so the other parcel still reconciles")
     check(len(r.rejected) == 1 and r.rejected[0].reason == TOO_LONG,
@@ -1206,7 +1225,7 @@ def self_test():
     check("pad numbers to 11" in lines[0],
           "naming the width it padded to, because that width was inferred "
           "from the data  <-- pinned defect")
-    check("ceiling 18 characters" in lines[0] and "reject non-ASCII" in lines[0],
+    check("ceiling 26 characters" in lines[0] and "reject non-ASCII" in lines[0],
           "and the ceiling and the ASCII rule")
     check("fold case" in lines[0] and "strip punctuation" in lines[0],
           "and what it did to the text")
@@ -1292,7 +1311,7 @@ def self_test():
     check(len(doc["gis_only"]) == 10 and doc["counts"]["gis_only"] == 30,
           "and the json's own default lists ten, the same as the report  "
           "<-- pinned defect")
-    doc = as_json(reconcile(["12345"], ["1234567890123456789"], fl))
+    doc = as_json(reconcile(["12345"], ["123456789012345678901234567"], fl))
     check(doc["rejected"][0]["reason"] == TOO_LONG,
           "a rejected identifier reaches the json with its reason")
     check("scheme" in doc["rejected"][0]["detail"],
@@ -1320,7 +1339,7 @@ def self_test():
     check([r[1] for r in rows] == ["collision", "collision"],
           "a collision writes both originals")
     check(all(r[3] == "0123456" for r in rows), "under the key they share")
-    rows = exceptions(reconcile(["", "1234567890123456789"], [], fl))
+    rows = exceptions(reconcile(["", "123456789012345678901234567"], [], fl))
     check([r[1] for r in rows] == ["rejected", "rejected"],
           "a rejected identifier is an exception row too")
     check(rows[0][2] == "" and rows[0][3] == "",
@@ -1377,7 +1396,7 @@ def self_test():
               b"3,00123-001-002,PINE RIDGE\n"
               b"4,00999-001-000,ORPHAN\n"
               b"5,,NO ID\n"
-              b"6,1234567890123456789,FOREIGN\n")
+              b"6,123456789012345678901234567,FOREIGN\n")
         roll_csv = os.path.join(tmp, "nal.csv")
         write(roll_csv,
               b"CO_NO,PARCEL_ID,JV\n"
@@ -1461,6 +1480,32 @@ def self_test():
               "and that missing cell is rejected rather than crashing the run")
         check("None" not in out,
               "with the word None printed nowhere  <-- pinned defect")
+        oc_gis = os.path.join(tmp, "oc-gis.csv")
+        oc_roll = os.path.join(tmp, "oc-roll.csv")
+        write(oc_gis, b"PARCEL_ID\n123001000\n\n123001001\n")
+        write(oc_roll, b"PARCEL_ID\n123001000\n123001001\n")
+        check(column(read_csv_rows(oc_gis)[1], "PARCEL_ID")
+              == ["123001000", "", "123001001"],
+              "a blank line between records in a one column file is a record "
+              "with an empty identifier, not a line the reader drops  "
+              "<-- pinned defect")
+        rc, out = capture(lambda: main([oc_gis, oc_roll]))
+        check(rc == 1 and "oc-gis.csv 3 record(s)" in out
+              and "REJECTED  1 identifier(s)" in out
+              and "VERDICT: DOES NOT RECONCILE" in out,
+              "so the run rejects it and does not reconcile, instead of "
+              "exit 0 over a record it lost  <-- pinned defect")
+        write(oc_gis, b"PARCEL_ID\n123001000\n123001001\n\n\n")
+        check(column(read_csv_rows(oc_gis)[1], "PARCEL_ID")
+              == ["123001000", "123001001"],
+              "blank lines at the end of the file are not records")
+        write(oc_gis, b"JV,PARCEL_ID\n1,123001000\n\n2,123001001\n")
+        check(read_csv_rows(oc_gis)[1][1] == {"JV": "", "PARCEL_ID": ""},
+              "and a blank line inside a file with several columns is a "
+              "record with every cell empty  <-- pinned defect")
+        write(oc_gis, b"\nPARCEL_ID\n123001000\n")
+        raises(lambda: read_csv_rows(oc_gis),
+               "a blank first line is no header row, as before")
         write(os.path.join(tmp, "empty.csv"), b"")
         raises(lambda: read_csv_rows(os.path.join(tmp, "empty.csv")),
                "a CSV with no header row raises rather than reporting nothing")
@@ -1491,7 +1536,7 @@ def self_test():
         check("REJECTED  2 identifier(s)" in out,
               "the blank and the foreign identifier are both rejected")
         check("belongs to a different identifier scheme" in out,
-              "and the 19 digit one says why  <-- pinned defect")
+              "and the 27 digit one says why  <-- pinned defect")
         check("pad numbers to 11" in out,
               "the padding width is reported, and it came from the data")
         check("nal.csv" in out and "parcels.csv" in out,
@@ -1588,7 +1633,7 @@ def self_test():
               == written[1][:4],
               "each row carries the side, the class, the identifier and the "
               "key")
-        check(any(row[2] == "1234567890123456789" for row in written),
+        check(any(row[2] == "123456789012345678901234567" for row in written),
               "the foreign identifier is in the file, written whole  "
               "<-- pinned defect")
         rejected_rows = [row for row in written[1:] if row[1] == "rejected"]
@@ -1789,13 +1834,13 @@ def self_test():
               "while the default rule keeps them apart and reports them")
 
         long_csv = os.path.join(tmp, "long.csv")
-        write(long_csv, b"PARCEL_ID\n1234567890123456789\n")
+        write(long_csv, b"PARCEL_ID\n123456789012345678901234567\n")
         rc, out = capture(lambda: main([long_csv, long_csv]))
         check(rc == 1 and "REJECTED  2" in out,
-              "a 19 digit identifier is rejected on both sides")
-        check("1234567890123456789" in out, "and printed whole, not truncated")
-        rc, out = capture(lambda: main([long_csv, long_csv, "--max-len", "19"]))
-        check(rc == 0, "--max-len 19 lets it through")
+              "a 27 digit identifier is rejected on both sides")
+        check("123456789012345678901234567" in out, "and printed whole, not truncated")
+        rc, out = capture(lambda: main([long_csv, long_csv, "--max-len", "27"]))
+        check(rc == 0, "--max-len 27 lets it through")
         rc, out = capture(lambda: main([long_csv, long_csv, "--max-len", "0"]))
         check(rc == 0, "and --max-len 0 removes the ceiling altogether")
         rc, out = capture(lambda: main([long_csv, long_csv, "--max-len", "-1"]))
