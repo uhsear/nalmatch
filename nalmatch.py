@@ -546,14 +546,38 @@ def column(rows, field):
     return [row.get(field) for row in rows]
 
 
+# A spreadsheet reads a text cell that starts with one of these as a formula
+# (OWASP, "CSV Injection"). IDENTIFIER and KEY are copied from the two input
+# files, so a hostile or merely odd identifier would otherwise run in the
+# reader's Excel.
+FORMULA_LEADS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def cell(value):
+    """A CSV cell that a spreadsheet will not run as a formula.
+
+    Only text is guarded. A number or None goes through untouched, so a numeric
+    column stays numeric. nalmatch never reads its own CSV back, so there is no
+    matching strip on read.
+    """
+    if isinstance(value, str) and value.startswith(FORMULA_LEADS):
+        return "'" + value
+    return value
+
+
+def csv_rows(rows):
+    """The header and every exception row, each cell guarded by cell()."""
+    out = [["SIDE", "CLASS", "IDENTIFIER", "KEY", "DETAIL"]]
+    for row in rows:
+        out.append([cell(value) for value in row])
+    return out
+
+
 def write_exceptions(path, result):
     """Write the exception rows as a CSV. Returns how many were written."""
     rows = exceptions(result)
     with open(path, "w", newline="", encoding="utf-8") as fh:
-        writer = csv.writer(fh)
-        writer.writerow(["SIDE", "CLASS", "IDENTIFIER", "KEY", "DETAIL"])
-        for row in rows:
-            writer.writerow(list(row))
+        csv.writer(fh).writerows(csv_rows(rows))
     return len(rows)
 
 
@@ -1520,8 +1544,80 @@ def self_test():
             check(len(list(csv.reader(fh))) == 1,
                   "and the exception file holds its header and nothing else")
 
+        # ---- formula injection. A text cell that a spreadsheet would run as a
+        # formula gets one apostrophe in front. IDENTIFIER and KEY come from
+        # the input files; SIDE, CLASS and DETAIL are fixed text today, and are
+        # guarded as well so that a later edit cannot open a gap.
+        leads = (("equals", "="), ("plus", "+"), ("minus", "-"),
+                 ("at sign", "@"), ("tab", chr(9)), ("carriage return",
+                                                     chr(13)))
+        columns = ("side", "class", "identifier", "key", "detail")
+        for index, column_name in enumerate(columns):
+            for lead_name, lead in leads:
+                plain_row = ["gis", "no-roll-record", "12345", "12345", "x"]
+                hostile = list(plain_row)
+                hostile[index] = lead + "1+1"
+                guarded = csv_rows([tuple(hostile)])[1]
+                untouched = all(guarded[i] == plain_row[i]
+                                for i in range(5) if i != index)
+                check(guarded[index] == "'" + lead + "1+1" and untouched,
+                      "the %s column guards a leading %s with one apostrophe "
+                      "and changes no other cell  <-- pinned defect"
+                      % (column_name, lead_name))
+        check(csv_rows([])[0] == ["SIDE", "CLASS", "IDENTIFIER", "KEY",
+                                  "DETAIL"],
+              "the header row is fixed text and is not guarded")
+        check([cell(v) for v in ("12345", "", "a=1", "12-3", "'=1")]
+              == ["12345", "", "a=1", "12-3", "'=1"],
+              "text that does not START with a trigger is left alone, "
+              "including a hyphen inside an identifier")
+        check(cell(-5) == -5 and isinstance(cell(-5), int)
+              and cell(2.5) == 2.5 and cell(None) is None,
+              "a number or None passes through unchanged, so a numeric "
+              "column stays numeric  <-- pinned defect")
+        check(csv_rows([("gis", "x", -5, None, 7)])[1]
+              == ["gis", "x", -5, None, 7],
+              "and a numeric cell in a row is not stringified or prefixed")
+
+        hostile_gis = os.path.join(tmp, "hostile-gis.csv")
+        write(hostile_gis, b'PARCEL_ID\n=1+1\n+7\n-8\n@x\n"\tTAB"\n"\rCR"\n'
+                           b'12-3\n9\n')
+        hostile_roll = os.path.join(tmp, "hostile-roll.csv")
+        write(hostile_roll, b"PARCEL_ID\n9\n")
+        hostile_out = os.path.join(tmp, "hostile-out.csv")
+        rc, out = capture(lambda: main([hostile_gis, hostile_roll,
+                                        "--profile", "generic",
+                                        "--punctuation", "keep",
+                                        "--write-csv", hostile_out,
+                                        "--apply"]))
+        check(rc == 1 and "wrote 7 exception row(s)" in out,
+              "a file of hostile identifiers is reported and written")
+        with open(hostile_out, "r", newline="", encoding="utf-8") as fh:
+            hostile_rows = list(csv.reader(fh))
+        check([row[2] for row in hostile_rows[1:]]
+              == ["'=1+1", "'+7", "'-8", "'@x", "'" + chr(9) + "TAB",
+                  "'" + chr(13) + "CR", "12-3"],
+              "every hostile identifier reaches the file with one apostrophe "
+              "in front  <-- pinned defect")
+        check([row[3] for row in hostile_rows[1:4]] == ["'=1+1", "'+7", "'-8"],
+              "and so does a KEY that starts with = + or -  <-- pinned defect")
+        check(not any(row[2][:1] in ("=", "+", "-", "@", chr(9), chr(13))
+                      or row[3][:1] in ("=", "+", "-", "@", chr(9), chr(13))
+                      for row in hostile_rows[1:]),
+              "so no IDENTIFIER or KEY cell in the file starts with a "
+              "trigger  <-- pinned defect")
+        restored = [row[2][1:] for row in hostile_rows[1:7]]
+        check(restored == ["=1+1", "+7", "-8", "@x", chr(9) + "TAB",
+                           chr(13) + "CR"],
+              "the guard is lossless: dropping that one apostrophe gives the "
+              "input identifier back, which is the round trip a reader of the "
+              "file would apply")
+        check(hostile_rows[7][2] == "12-3",
+              "an identifier with a hyphen inside it is written exactly as "
+              "read, with no apostrophe")
+
         # ---- the profiles and the rule flags, end to end
-        dashes = os.path.join(tmp, "dashes.csv")
+        dashes =os.path.join(tmp, "dashes.csv")
         write(dashes, b"PARCEL_ID\n12-345\n12-346\n")
         plain = os.path.join(tmp, "plain.csv")
         write(plain, b"PARCEL_ID\n12345\n12346\n")
@@ -1780,26 +1876,37 @@ def self_test():
     # flag must be refused, and the parser exits 2 without writing.
     stderr = sys.stderr
     sys.stderr = io.StringIO()
+    exit_code = None
     try:
         _parse(["a", "b", "--ap"])
-        refused = False
     except SystemExit as exc:
-        refused = exc.code == 2
+        exit_code = exc.code
     finally:
         sys.stderr = stderr
-    check(refused,
+    check(exit_code == 2,
           "a unique prefix of --apply is refused by the parser, not read as "
           "the write flag  <-- pinned defect")
 
+    # ---- the footer reports a failure as loudly as a pass
+    check(_summary(3, []) == (["3 assertions, 0 failed"], 0),
+          "the footer of a green run is the count and 0 failed")
+    check(_summary(3, ["x", "y"]) == (["3 assertions, 2 failed",
+                                       "  FAILED: x", "  FAILED: y"], 1),
+          "the footer of a red run names every failed assertion and returns 1")
+
     print("-" * 68)
-    total = passed[0] + len(failed)
+    lines, rc = _summary(passed[0] + len(failed), failed)
+    for line in lines:
+        print(line)
+    return rc
+
+
+def _summary(total, failed):
+    """The self-test footer lines and the exit code."""
     if failed:
-        print("%d assertions, %d failed" % (total, len(failed)))
-        for f in failed:
-            print("  FAILED: %s" % f)
-        return 1
-    print("%d assertions, 0 failed" % total)
-    return 0
+        return (["%d assertions, %d failed" % (total, len(failed))]
+                + ["  FAILED: %s" % f for f in failed], 1)
+    return ["%d assertions, 0 failed" % total], 0
 
 
 # ----------------------------------------------------------------------- cli
@@ -1948,5 +2055,5 @@ def main(argv=None):
     return 0 if result.verdict == RECONCILES else 1
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     sys.exit(main())

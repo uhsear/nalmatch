@@ -68,11 +68,23 @@ PASS  and not one stale row survives the rewrite  <-- pinned defect
 PASS  and writes NOTHING, because the rule that made those rows merges parcels  <-- pinned defect
 PASS  and when BOTH spellings are in the layer, stripping the check digit merges two records and the run is refused  <-- pinned defect
 ...
+PASS  the identifier column guards a leading equals with one apostrophe and changes no other cell  <-- pinned defect
+PASS  the identifier column guards a leading tab with one apostrophe and changes no other cell  <-- pinned defect
+PASS  the identifier column guards a leading carriage return with one apostrophe and changes no other cell  <-- pinned defect
+PASS  the key column guards a leading equals with one apostrophe and changes no other cell  <-- pinned defect
+PASS  the detail column guards a leading equals with one apostrophe and changes no other cell  <-- pinned defect
+PASS  a number or None passes through unchanged, so a numeric column stays numeric  <-- pinned defect
+PASS  every hostile identifier reaches the file with one apostrophe in front  <-- pinned defect
+PASS  the guard is lossless: dropping that one apostrophe gives the input identifier back, which is the round trip a reader of the file would apply
+PASS  an identifier with a hyphen inside it is written exactly as read, with no apostrophe
+...
 PASS  and every rule override defaults to 'whatever the profile says'  <-- pinned defect
 PASS  nalmatch imports no network module: there is no upload path to audit, and no credential for one to carry
 PASS  a unique prefix of --apply is refused by the parser, not read as the write flag  <-- pinned defect
+PASS  the footer of a green run is the count and 0 failed
+PASS  the footer of a red run names every failed assertion and returns 1
 --------------------------------------------------------------------
-408 assertions, 0 failed
+450 assertions, 0 failed
 ```
 
 ## Requirements
@@ -81,10 +93,14 @@ Python 3.9 or newer and nothing else. No `arcpy`, no third-party package, no net
 database. Both sides are CSVs, which is what every parcel layer and every roll extract can be
 exported as.
 
-The self-test runs 408 assertions on Windows (3.13.2) and on ArcGIS Pro's own interpreter (3.13.7),
-both measured after the write-flag assertion was added. The Ubuntu (3.12.3) run has not been repeated
-since, so its last count of 407 predates that assertion. The code uses no syntax newer than Python
-3.6, but 3.12 is the oldest interpreter it has actually been run on.
+The self-test runs 450 assertions and the count is the same on every interpreter it was run on:
+Windows CPython 3.9.25, 3.12.10 and 3.13.2, ArcGIS Pro's own interpreter (3.13.7), and Ubuntu
+CPython 3.12.3. There is no unavoidable difference between hosts. Measured with
+`coverage run --branch nalmatch.py --self-test` (coverage 7.16.1), branch coverage is 100%
+(1007 statements, 168 branches, 0 missed). The one line the self-test cannot reach is
+`sys.exit(main())` under `if __name__ == "__main__"`, which runs only when the file is the
+program and is marked `# pragma: no cover`. The exit codes it forwards are asserted through
+`main()` directly.
 
 ```
 git clone https://github.com/uhsear/nalmatch.git
@@ -308,6 +324,31 @@ statement about any statute, and `--max-len` changes it.
 Exit 3 is deliberately not exit 1. A script that treats "some parcels did not match" as routine
 must not treat "this key rule is wrong" the same way.
 
+## The exception CSV and spreadsheets
+
+`--write-csv` copies identifiers from the two input files into a CSV that somebody opens in a
+spreadsheet. A text cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return can be
+read there as a formula, and an identifier is free text. OWASP calls this CSV injection and lists
+those leading characters (see References). nalmatch puts one apostrophe in front of every such
+text cell, in all five columns, as the last step before the row is written.
+
+- The rule is the same in every column: only text, only a cell that starts with one of the six
+  characters, and exactly one apostrophe. `12-3` is written as it came. `-8` becomes `'-8`.
+- A number or an empty value is not text, so it is not touched. Today every column is text, so
+  this is a property of the function and not of any column.
+- The guard loses nothing. Drop the one leading apostrophe and the identifier you read is the
+  identifier you were given. The self-test pins that round trip against a file that holds all
+  six leads.
+- nalmatch never reads its own CSV. `read_csv_rows` reads only the two files you name, so there
+  is no strip on read. Do not feed the exception file back in as an input.
+- The apostrophe is visible text in the cell. It is a guard, not a display format.
+
+What the self-test proves is the bytes in the file: it writes the CSV, reads it back with Python's
+`csv` module, and checks every guarded column for every lead. It does not open the file in a
+spreadsheet, so what Excel or another program does with the apostrophe is OWASP's claim here and
+not something this repository tested. OWASP also warns that a quote prefix can fail in Excel
+after the file is saved and opened again.
+
 ## Remapped identifiers and filtered rows
 
 nalmatch has no crosswalk. It does not map a legacy identifier to the identifier that replaced it.
@@ -347,10 +388,22 @@ three groups:
   two files that never had them. Pass `--pad` an exact width when you know it.
 - A duplicate identifier is reported but does not stop the run, so a downstream join can still
   double count. The exception CSV names it.
+- The guard covers the six leads listed above. OWASP also lists a line
+  feed and full-width forms of `=` and `+`. A cell that starts with one of those is written as
+  it came.
 - Nothing is written without `--apply`, and a refused run writes nothing at all.
 - It opens no socket and imports no network module, so there is no credential anywhere in it to
   leak. The self-test asserts that against its own source, which means a future edit that adds an
   upload has to delete an assertion to do it.
+
+## References
+
+- OWASP, "CSV Injection": the leading characters (`=`, `+`, `-`, `@`, tab, carriage return, line
+  feed) and the single quote prefix as one mitigation, with the warning that it can fail in
+  Excel after a save and reopen. https://owasp.org/www-community/attacks/CSV_Injection
+- Python documentation, `csv`: `csv.writer` writes `None` as the empty string and stringifies
+  every other non-string value, and a file passed to it should be opened with `newline=''`.
+  https://docs.python.org/3/library/csv.html
 
 ## Contributing
 
