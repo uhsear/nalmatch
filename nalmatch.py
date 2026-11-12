@@ -81,6 +81,7 @@ NON_ASCII = "non-ascii"
 PUNCT_ONLY = "punctuation-only"
 TOO_LONG = "too-long"
 TOO_SHORT = "too-short"
+FLOAT_SAVED = "float-saved"
 
 REASON_TEXT = {
     BLANK: "empty once trimmed, so there is no identifier to match on",
@@ -92,6 +93,10 @@ REASON_TEXT = {
     TOO_LONG: "longer than this profile allows, so it belongs to a different "
               "identifier scheme",
     TOO_SHORT: "too short to carry a check digit",
+    FLOAT_SAVED: "a whole number written with a decimal point and only zeros "
+                 "after it, which a spreadsheet or a data frame adds when the "
+                 "column holds an empty cell, and stripping the point would "
+                 "key it as a different number",
 }
 
 DIGITS = "0123456789"
@@ -282,6 +287,9 @@ def normalise(raw, rules, width=0):
             return None, NON_ASCII
     key = text.translate(ASCII_UPPER) if rules.fold_case else text
     if rules.strip_punctuation:
+        whole, point, zeros = key.partition(".")
+        if point and is_digits(whole) and zeros and set(zeros) == set("0"):
+            return None, FLOAT_SAVED
         key = "".join(c for c in key if c not in PUNCTUATION)
         if not key:
             return None, PUNCT_ONLY
@@ -983,10 +991,19 @@ def self_test():
     check(reason_of("1234-5678-9012-3456-7890-1234-567") == TOO_LONG,
           "the ceiling is measured after punctuation is removed, so a dashed "
           "27 digit identifier is refused too  <-- pinned defect")
-    check(key_of("49300117.0") == "493001170",
-          "an identifier saved as a float loses its dot with the other "
-          "separators and keys as a different number, which the README lists "
-          "as a limit")
+    check(reason_of("49300117.0") == FLOAT_SAVED
+          and reason_of("49300117.00") == FLOAT_SAVED
+          and key_of("49300117.0") is None,
+          "an identifier saved as a float is refused, because its dot would "
+          "be stripped and it would key as the different number 493001170  "
+          "<-- pinned defect")
+    check(key_of("49300117.5") == "493001175"
+          and key_of("12.34.0") == "12340" and key_of(".0") == "0"
+          and key_of("1A.0") == "1A0" and key_of("49300117.") == "49300117",
+          "while a dotted identifier that is not digits, a point and zeros "
+          "is still a separator and is stripped as before")
+    check(key_of("49300117.0", generic) == "49300117.0",
+          "and a rule that keeps punctuation leaves the dot alone")
     check(key_of("1234-5678-9012-3456-7890-1234-56") == "12345678901234567890123456",
           "while 26 digits with the same dashes is accepted, and keys as "
           "those 26 digits  <-- pinned defect")
@@ -1063,7 +1080,8 @@ def self_test():
           "and so is a lone surrogate, rather than raising on the encode  "
           "<-- pinned defect")
     check(sorted(REASON_TEXT) == sorted([BLANK, NOT_TEXT, NON_ASCII,
-                                         PUNCT_ONLY, TOO_LONG, TOO_SHORT]),
+                                         PUNCT_ONLY, TOO_LONG, TOO_SHORT,
+                                         FLOAT_SAVED]),
           "every refusal reason has a sentence explaining it")
     for reason in REASON_TEXT:
         check(len(REASON_TEXT[reason]) > 20,
@@ -1953,6 +1971,20 @@ def self_test():
         check(hostile_rows[7][2] == "12-3",
               "an identifier with a hyphen inside it is written exactly as "
               "read, with no apostrophe")
+        # A stripped separator can sit in front of a tab or a carriage
+        # return, so a trimmed KEY can start with either.
+        lead_gis = os.path.join(tmp, "keylead-gis.csv")
+        write(lead_gis, b'PARCEL_ID\n"-\t=x"\n"-\r=y"\n')
+        lead_out = os.path.join(tmp, "keylead-out.csv")
+        rc, out = capture(lambda: main([lead_gis, hostile_roll,
+                                        "--write-csv", lead_out, "--apply"]))
+        with open(lead_out, "r", newline="", encoding="utf-8") as fh:
+            lead_rows = list(csv.reader(fh))
+        check(rc == 1 and lead_rows[1][3] == "'" + chr(9) + "=X"
+              and lead_rows[2][3] == "'" + chr(13) + "=Y",
+              "a KEY that starts with a tab or a carriage return, because a "
+              "stripped separator came before it, is guarded too  "
+              "<-- pinned defect")
 
         # ---- the profiles and the rule flags, end to end
         dashes =os.path.join(tmp, "dashes.csv")

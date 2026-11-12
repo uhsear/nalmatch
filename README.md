@@ -111,7 +111,7 @@ PASS  while a run that returns a code instead of exiting reports no SystemExit
 PASS  the footer of a green run is the count and 0 failed
 PASS  the footer of a red run names every failed assertion and returns 1
 --------------------------------------------------------------------
-547 assertions, 0 failed
+551 assertions, 0 failed
 ```
 
 ## Requirements
@@ -120,16 +120,16 @@ Python 3.9 or newer and nothing else. No `arcpy`, no third-party package, no net
 database. Both sides are CSVs, which is what every parcel layer and every roll extract can be
 exported as.
 
-The self-test runs 547 assertions and the count is the same on every interpreter it was run on:
+The self-test runs 551 assertions and the count is the same on every interpreter it was run on:
 Windows CPython 3.9.25, 3.12.10 and 3.13.2, ArcGIS Pro's own interpreter (3.13.7), and Ubuntu
 CPython 3.12.3. There is no unavoidable difference between hosts. Measured with
 `coverage run --branch nalmatch.py --self-test` (coverage 7.16.1), branch coverage is 100%
-(1261 statements, 204 branches, 0 missed). That figure depends on one `# pragma: no cover` on
+(1274 statements, 206 branches, 0 missed). That figure depends on one `# pragma: no cover` on
 the `if __name__ == "__main__"` line. Running the file as a program does execute
 `sys.exit(main())`. What cannot be reached is the other arc of that `if`, the one taken when
 the file is imported, because the self-test runs the file as the program. Without the pragma,
-the same run reports 1263 statements, 206 branches, one partial branch (the `if` line, 2588 to the exit) and 99%. The exit codes
-`main()` forwards are asserted through `main()` directly.
+the same run reports 1276 statements, 208 branches, one partial branch (the `if` line, 2620 to the exit) and 99%.
+The exit codes `main()` forwards are asserted through `main()` directly.
 
 ```
 git clone https://github.com/uhsear/nalmatch.git
@@ -433,8 +433,9 @@ text cell, in all five columns, as the last step before the row is written.
 
 What the self-test proves is the bytes in the file, in two steps. A real run through `main()`
 writes the CSV, reads it back with Python's `csv` module, and checks the IDENTIFIER column for all
-six leads and the KEY column for `=`, `+` and `-`. A trimmed key cannot start with a tab or a
-carriage return. SIDE, CLASS and DETAIL are fixed text that `main()` cannot make hostile, so a
+six leads and the KEY column for `=`, `+` and `-`. A second run uses `-<TAB>=x` and `-<CR>=y`: the
+stripped hyphen leaves a key that starts with a tab or a carriage return, and the file holds
+that key with the apostrophe. SIDE, CLASS and DETAIL are fixed text that `main()` cannot make hostile, so a
 second set of assertions calls `write_rows()` with a lead in each of the five columns and reads
 the written file back for all six leads. A second matrix calls `csv_rows()` in memory. It does not open the file in a
 spreadsheet, so what Excel or another program does with the apostrophe is OWASP's claim here and
@@ -466,7 +467,7 @@ out what it left out, grouped by reason.
   whose first line is sensitive.
 - OWASP names a tab prefix inside the quoted field as the mitigation that survives Excel. nalmatch
   uses an apostrophe, as xwddiff does, and neither was tested in a spreadsheet.
-- The speed figure above comes from a hand measurement (0.11 s on Windows 3.13), and the
+- The speed figure (0.11 s for 1215 and 1212 rows) comes from a hand measurement (0.11 s on Windows 3.13), and the
   self-test does not run a pair that size.
 - It compares identifiers and nothing else. Two rows that match on the key are reconciled here
   even if every other field disagrees. Acreage, owner and use code are somebody else's check.
@@ -492,16 +493,18 @@ out what it left out, grouped by reason.
 - A lead character that follows a space or a line feed is not guarded in the IDENTIFIER column,
   which keeps the raw text, so `  =2` and a line feed followed by `=cmd` are written as they came.
   The trimmed KEY column is guarded. Whether a spreadsheet runs such a cell was not tested.
-- An identifier saved as a float, such as `49300117.0`, loses its dot under the separator rule and
-  becomes the key `493001170`, which is the key of a different parcel if that parcel exists on
-  the other side.
+- An identifier saved as a float, such as `49300117.0` (a data frame writes that when the column
+  holds an empty cell), is refused as `float-saved` under any rule that strips punctuation,
+  because its dot would be stripped and it would key as the different number `493001170`. The
+  refusal looks only for digits, one point and zeros. `49300117.5` is still a dotted identifier
+  and loses its dot. A rule that keeps punctuation keeps the dot and never pairs the two.
 - `--pad` accepts any width. A very large value, such as `--pad 99999999999`, zero fills every
   all-digit key to that length and can exhaust memory. A value above the largest string length Python
   allows, such as `--pad 99999999999999999999999`, ends in an `OverflowError`. Both tracebacks
   exit 1, which reads as "did not reconcile".
 - An identifier that holds a line break inside a quoted CSV field is printed as it is, so it can
   add lines to the text report, including a fake `VERDICT` line above the real one. The real
-  verdict is the last line and the exit code.
+  verdict is the last `VERDICT` line before any `wrote` or `would write` status line, and the exit code.
 - `--write-csv` with `--apply` opens the path directly and follows a symbolic link, so a link to
   an input file overwrites that file, as the input file itself does.
 - A roll file saved without a header row is read with its first record as the header, so the run
@@ -563,6 +566,8 @@ out what it left out, grouped by reason.
   line under it, with a `# pragma: no cover`. The self-test runs the file as the program, so the
   import arm of that `if` cannot be taken.
 - Nothing is written without `--apply`, and a refused run writes nothing at all.
+- A refused run prints no status line about the exception file, so its silence does not say that nothing
+  was written: the refusal itself is the reason.
 - It opens no socket and imports no network module, so there is no credential anywhere in it to
   leak. The self-test checks the import statements in its own source for the common network
   modules. It does not see `__import__` or `importlib`, so it is a tripwire for an ordinary
