@@ -248,9 +248,11 @@ class Result(object):
             return NOTHING
         if self.gis_only or self.roll_only or self.duplicates or self.rejected:
             return DOES_NOT
-        if self.padded and len(self.padded) == self.matched:
-            # No match is exact, so nothing shows that the two sides share a
-            # keyspace. The tool cannot tell a lost zero from two parcels.
+        if self.padded:
+            # One pad-only match is enough. The tool cannot tell a lost zero
+            # from two parcels, and an exact match elsewhere does not say
+            # which one a padded pair is: 900 exact lots beside 312 padded
+            # ones is the subdivision failure, not a clean run.
             return UNCONFIRMED
         return RECONCILES
 
@@ -520,8 +522,8 @@ def describe(result, sample=DEFAULT_SAMPLE):
         if len(result.padded) > sample:
             lines.append("      ... %d more" % (len(result.padded) - sample))
         if result.verdict == UNCONFIRMED:
-            lines.append("      every match needed a zero added, so nothing "
-                         "shows the two sides share one identifier scheme")
+            lines.append("      a zero was added to make these match, and the "
+                         "tool cannot tell a lost zero from two parcels")
 
     def listing(head, entries, render):
         lines.append(head)
@@ -1261,9 +1263,11 @@ def self_test():
 
     # ---- a match that exists only because of padding is named, not hidden
     r = reconcile(["12345", "AB-7"], ["012345", "AB7"], fl)
-    check(r.matched == 2 and r.verdict == RECONCILES and r.width == 6,
+    check(r.matched == 2 and r.verdict == UNCONFIRMED and r.width == 6,
           "12345 on the layer and 012345 on the roll match under the default "
-          "profile, which is the repair for a lost zero")
+          "profile, which is the repair for a lost zero, and the run is "
+          "unconfirmed because AB7 matching exactly does not vouch for it  "
+          "<-- pinned defect")
     check(r.padded == [("012345", "12345", "012345")],
           "and the tool names that pair as matched only by padding, because "
           "it cannot tell a lost zero from two parcels  <-- pinned defect")
@@ -1288,18 +1292,31 @@ def self_test():
           and not (r.gis_only or r.roll_only or r.duplicates),
           "although every parcel matched and nothing else is wrong")
     lines = describe(r, 1)
-    check(lines[-1] == "VERDICT: UNCONFIRMED" and "      every match needed a "
-          "zero added, so nothing shows the two sides share one identifier "
-          "scheme" in lines,
+    check(lines[-1] == "VERDICT: UNCONFIRMED" and "      a zero was added to "
+          "make these match, and the tool cannot tell a lost zero from two "
+          "parcels" in lines,
           "the report says why under PADDED and ends on the verdict")
     check(as_json(r, 1)["verdict"] == UNCONFIRMED
           and as_json(r, 1)["counts"]["padded"] == 312,
           "and the json carries the same verdict")
-    check(UNCONFIRMED not in "".join(describe(
-              reconcile(["12345", "AB-7"], ["012345", "AB7"], fl)))
-          and "every match needed" not in "".join(describe(
-              reconcile(["12345", "AB-7"], ["012345", "AB7"], fl))),
-          "one exact match among the padded ones keeps the run clean")
+    mixed = reconcile(["12345", "AB-7"], ["012345", "AB7"], fl)
+    check(mixed.verdict == UNCONFIRMED
+          and mixed.padded == [("012345", "12345", "012345")],
+          "one exact match among the padded ones does not make the run clean")
+    exact = ["%d" % (100000000 + i) for i in range(900)]
+    lost = [str(int(p)) for p in subdivision]
+    big = reconcile(exact + subdivision, exact + lost, fl)
+    check(big.matched == 1212 and len(big.padded) == 312
+          and not (big.gis_only or big.roll_only or big.duplicates
+                   or big.rejected),
+          "900 exact lots beside the 312 that lost a zero all match")
+    check(big.verdict == UNCONFIRMED and describe(big)[-1]
+          == "VERDICT: UNCONFIRMED" and as_json(big)["verdict"] == UNCONFIRMED,
+          "and the run is unconfirmed, not clean: 312 unvouched pairs in "
+          "1212 is the failure the tool exists to stop  <-- pinned defect")
+    big = reconcile(exact, exact, fl)
+    check(big.verdict == RECONCILES and big.padded == [],
+          "the same 900 lots with no padded pair stay clean")
     check(reconcile(["12345"], ["012345"], fl).verdict == UNCONFIRMED
           and reconcile(["12345", "7"], ["012345"], fl).verdict == DOES_NOT,
           "a lone pad-only match is unconfirmed and a leftover still wins")
@@ -1999,10 +2016,10 @@ def self_test():
         pad_roll = os.path.join(tmp, "pad-roll.csv")
         write(pad_roll, b"PARCEL_ID\n012345\nAB7\n")
         rc, out = capture(lambda: main([pad_gis, pad_roll]))
-        check(rc == 0 and "VERDICT: RECONCILES" in out
+        check(rc == 1 and "VERDICT: UNCONFIRMED" in out
               and "PADDED    1 of those" in out
               and "gis 12345  =  roll 012345" in out,
-              "end to end: the default run exits 0 and names the one pair "
+              "end to end: the default run exits 1 and names the one pair "
               "that matched only because of padding  <-- pinned defect")
         rc, out = capture(lambda: main([pad_gis, pad_roll, "--pad", "off"]))
         check(rc == 1 and "PADDED" not in out and "MATCHED   1 key" in out,

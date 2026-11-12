@@ -64,6 +64,7 @@ PASS  and with padding off NOT ONE of them matches, which is the join that succe
 PASS  every parcel is reported on one side only
 ...
 PASS  and the tool names that pair as matched only by padding, because it cannot tell a lost zero from two parcels  <-- pinned defect
+PASS  and the run is unconfirmed, not clean: 312 unvouched pairs in 1212 is the failure the tool exists to stop  <-- pinned defect
 ...
 PASS  and the offset is the position in the FILE, not in the decoder chunk that held it  <-- pinned defect
 ...
@@ -98,7 +99,7 @@ PASS  so no IDENTIFIER or KEY cell in the file starts with a trigger  <-- pinned
 PASS  the detail column reaches the FILE with a leading tab guarded and no other cell changed  <-- pinned defect
 PASS  the detail column reaches the FILE with a leading carriage return guarded and no other cell changed  <-- pinned defect
 ...
-PASS  end to end: the default run exits 0 and names the one pair that matched only because of padding  <-- pinned defect
+PASS  end to end: the default run exits 1 and names the one pair that matched only because of padding  <-- pinned defect
 ...
 PASS  and does not fire on a longer module name or a comment
 PASS  and that search really was run over this file's own source
@@ -111,7 +112,7 @@ PASS  while a run that returns a code instead of exiting reports no SystemExit
 PASS  the footer of a green run is the count and 0 failed
 PASS  the footer of a red run names every failed assertion and returns 1
 --------------------------------------------------------------------
-551 assertions, 0 failed
+554 assertions, 0 failed
 ```
 
 ## Requirements
@@ -120,15 +121,15 @@ Python 3.9 or newer and nothing else. No `arcpy`, no third-party package, no net
 database. Both sides are CSVs, which is what every parcel layer and every roll extract can be
 exported as.
 
-The self-test runs 551 assertions and the count is the same on every interpreter it was run on:
+The self-test runs 554 assertions and the count is the same on every interpreter it was run on:
 Windows CPython 3.9.25, 3.12.10 and 3.13.2, ArcGIS Pro's own interpreter (3.13.7), and Ubuntu
 CPython 3.12.3. There is no unavoidable difference between hosts. Measured with
 `coverage run --branch nalmatch.py --self-test` (coverage 7.16.1), branch coverage is 100%
-(1274 statements, 206 branches, 0 missed). That figure depends on one `# pragma: no cover` on
+(1282 statements, 206 branches, 0 missed). That figure depends on one `# pragma: no cover` on
 the `if __name__ == "__main__"` line. Running the file as a program does execute
 `sys.exit(main())`. What cannot be reached is the other arc of that `if`, the one taken when
 the file is imported, because the self-test runs the file as the program. Without the pragma,
-the same run reports 1276 statements, 208 branches, one partial branch (the `if` line, 2620 to the exit) and 99%.
+the same run reports 1284 statements, 208 branches, one partial branch (the `if` line, 2637 to the exit) and 99%.
 The exit codes `main()` forwards are asserted through `main()` directly.
 
 ```
@@ -271,7 +272,7 @@ trust, use it.
 None of the three has an opinion about the key. They match the identifier you hand them, and they
 report a clean join over whatever subset agreed. The 312 lots in the story were not a join bug:
 the join did exactly what it was told. The gap is the identifier rule in front of it, and a rule
-that quietly merges two parcels is the one failure a join can never report, because a merged join
+that quietly merges two parcels is a failure a join does not report, because a merged join
 succeeds.
 
 That is the whole of this tool. It decides the rule, names what falls out of it, and refuses to
@@ -402,7 +403,7 @@ gives for `PARCEL_ID` (see References). It is a guard against mixing two keyspac
 | Code | Meaning |
 |---|---|
 | 0 | Everything reconciles. |
-| 1 | Something did not reconcile: class 1, 2, 3, or a rejected identifier. Also verdict `UNCONFIRMED`: every match needed a zero added, so no match is exact. |
+| 1 | Something did not reconcile: class 1, 2, 3, or a rejected identifier. Also verdict `UNCONFIRMED`: at least one match needed a zero added, so the tool cannot tell a lost zero from two parcels. |
 | 2 | A file could not be read (not UTF-8, an unterminated quote, empty, no header, or the identifier column named twice), `--write-csv` could not be written, or both files hold a header and no records (verdict `NOTHING TO COMPARE`, never `RECONCILES`). |
 | 3 | Refused. The identifier rule would merge two parcels. |
 | 64 | Usage error. |
@@ -465,10 +466,13 @@ out what it left out, grouped by reason.
   is not what this is for.
 - The no-such-field error prints the header line of the file it names, so do not name a file
   whose first line is sensitive.
-- OWASP names a tab prefix inside the quoted field as the mitigation that survives Excel. nalmatch
-  uses an apostrophe, as xwddiff does, and neither was tested in a spreadsheet.
-- The speed figure (0.11 s for 1215 and 1212 rows) comes from a hand measurement (0.11 s on Windows 3.13), and the
-  self-test does not run a pair that size.
+- nalmatch prefixes an apostrophe, as xwddiff does. The OWASP page lists that prefix, and this
+  repository did not verify that OWASP recommends any other prefix, such as a tab. Neither was
+  tested in a spreadsheet.
+- The speed figure is a hand measurement: about 0.15 s wall clock, including interpreter start,
+  for 1215 and 1212 rows on Windows 3.13. The self-test does not run a pair that size.
+- OWASP's CSV Injection page now answers 308 and redirects to
+  https://community.owasp.org/attacks/CSV_Injection. The link under References still works.
 - It compares identifiers and nothing else. Two rows that match on the key are reconciled here
   even if every other field disagrees. Acreage, owner and use code are somebody else's check.
 - There is no `--fix`. The tool decides what the identifier rule should be and names what falls
@@ -478,10 +482,11 @@ out what it left out, grouped by reason.
   both sides is the only thing `--check-digit strip` can honestly do.
 - A padded match is reported under `PADDED` and in the `--json` document, and it is not in the
   exception CSV. The tool cannot tell a lost zero from two parcels that share digits, so a layer
-  `12345` and a roll `012345` match and are named. When some other match is exact, the verdict
-  stays `RECONCILES`. When every match needed a zero, the verdict is `UNCONFIRMED` and the exit
-  code is 1, because nothing shows that the two sides share one identifier scheme. Read the
-  `PADDED` section before you trust a clean run.
+  `12345` and a roll `012345` match and are named. When one or more matches needed a zero, the
+  verdict is `UNCONFIRMED` and the exit code is 1, even if every other match is exact. An exact
+  match elsewhere does not say what a padded pair is: 900 exact lots beside 312 padded ones is
+  the subdivision failure, and the self-test pins that run as `UNCONFIRMED`. Read the `PADDED`
+  section, confirm the pairs, then trust the run.
 - `--pad auto` takes its width from the data in front of it. Two files that both lost their
   leading zeros pad to the short width and match each other, and the tool cannot tell that from
   two files that never had them. Pass `--pad` an exact width when you know it.
@@ -515,7 +520,9 @@ out what it left out, grouped by reason.
   its capital stay two identifiers.
 - Do not point `--write-csv` at one of your input files: with `--apply` it replaces that input.
 - A refused run (exit 3) with `--apply` leaves any existing file at the `--write-csv` path
-  untouched, so a stale exception CSV from an earlier run stays on disk.
+  untouched, so a stale exception CSV from an earlier run stays on disk. The same holds for a
+  run that exits 2 (a file could not be read, or `NOTHING TO COMPARE`): an earlier file at the
+  path stays, and it can be mistaken for this run's result.
 - The exception file is opened for writing directly, so a failure part way through (a full
   disk) can leave a truncated CSV together with exit 2.
 - The exception CSV is UTF-8 without a byte order mark. A spreadsheet may show an identifier
@@ -540,7 +547,8 @@ out what it left out, grouped by reason.
   repair working as designed, it is listed under `PADDED`, and the limit above covers the case
   where both sides lost zeros.
 - The redirected-output encoding behaviour behind the backslash escapes (Windows uses the ANSI
-  code page) is taken from Python's documentation for `sys.stdout`. It was not tested under every
+  code page) is taken from Python's documentation for `sys.stdout`, listed under References.
+  It was not tested under every
   Windows locale.
 - Only the 2025 Department of Revenue guide was read. The field numbering differs between guide
   years, and earlier guides were not compared.
@@ -550,8 +558,8 @@ out what it left out, grouped by reason.
   default reader would fold the rest of the file into one cell and drop every record in it. Strict
   mode also refuses a closing quote that is followed by more text before the comma, such as
   `"ab"c`, which a lenient reader would accept.
-- A run with one exact match and many padded ones is `RECONCILES` and exits 0. The tool cannot
-  tell whether the padded ones are lost zeros, so read `PADDED` or the padded count in `--json`.
+- An `UNCONFIRMED` run cannot be turned into a clean one from inside the tool. Check the pairs
+  under `PADDED` against the roll, repair the extract, and run again.
 - The 26 character ceiling replaced an earlier 18 character default. Set `--max-len 18` to get
   the old rule.
 - A header-only file on one side, with records on the other, is reported as findings (exit 1),
@@ -590,6 +598,9 @@ out what it left out, grouped by reason.
   NAP), 2025: the published files carry field names in the header row (Intended Users), and
   Field 2, `PARCEL_ID`, "can contain up to 26 alphanumeric characters".
   https://floridarevenue.com/property/dataportal/Documents/PTO%20Data%20Portal/User%20Guides/2025%20Users%20guide%20and%20quick%20reference/2025_NAL_SDF_NAP_Users_Guide.pdf
+- Python documentation, `sys.stdout`: on Windows, streams that are not a console use the system
+  locale encoding (the ANSI code page).
+  https://docs.python.org/3/library/sys.html#sys.stdout
 - Python documentation, `csv`: `csv.writer` writes `None` as the empty string and stringifies
   every other non-string value, and a file passed to it should be opened with `newline=''`.
   https://docs.python.org/3/library/csv.html
