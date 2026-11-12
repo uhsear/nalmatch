@@ -111,7 +111,7 @@ PASS  while a run that returns a code instead of exiting reports no SystemExit
 PASS  the footer of a green run is the count and 0 failed
 PASS  the footer of a red run names every failed assertion and returns 1
 --------------------------------------------------------------------
-541 assertions, 0 failed
+542 assertions, 0 failed
 ```
 
 ## Requirements
@@ -120,15 +120,15 @@ Python 3.9 or newer and nothing else. No `arcpy`, no third-party package, no net
 database. Both sides are CSVs, which is what every parcel layer and every roll extract can be
 exported as.
 
-The self-test runs 541 assertions and the count is the same on every interpreter it was run on:
+The self-test runs 542 assertions and the count is the same on every interpreter it was run on:
 Windows CPython 3.9.25, 3.12.10 and 3.13.2, ArcGIS Pro's own interpreter (3.13.7), and Ubuntu
 CPython 3.12.3. There is no unavoidable difference between hosts. Measured with
 `coverage run --branch nalmatch.py --self-test` (coverage 7.16.1), branch coverage is 100%
-(1244 statements, 200 branches, 0 missed). That figure depends on one `# pragma: no cover` on
+(1250 statements, 200 branches, 0 missed). That figure depends on one `# pragma: no cover` on
 the `if __name__ == "__main__"` line. Running the file as a program does execute
 `sys.exit(main())`. What cannot be reached is the other arc of that `if`, the one taken when
 the file is imported, because the self-test runs the file as the program. Without the pragma,
-the same run reports 1246 statements, 202 branches, one partial branch (the `if` line, 2542 to the exit) and 99%. The exit codes
+the same run reports 1252 statements, 202 branches, one partial branch (the `if` line, 2556 to the exit) and 99%. The exit codes
 `main()` forwards are asserted through `main()` directly.
 
 ```
@@ -293,7 +293,7 @@ repeated row is a data entry problem, not a key problem.
 
 **4. Identifiers that collide only after normalisation.** This is the one the tool exists for,
 and it is the only one that stops the run. If stripping punctuation or padding leading zeros
-gives two distinct parcels the same key, the join will succeed and be wrong: one parcel gets the
+gives two differently spelled identifiers on one side the same key, the join will succeed and be wrong: one parcel gets the
 other's roll record, and nothing anywhere reports an error.
 
 ```
@@ -346,9 +346,11 @@ The whole product is what happens to an identifier before the join sees it, and 
 steps matters:
 
 1. **Trim.** Leading and trailing whitespace is never part of an identifier.
-2. **Fold case.** `r12345` and `R12345` are one parcel.
-3. **Strip the separators** `- . _ /` and the space. `12345-001-000` and `12345001000` are one
-   parcel, and so are `12 345` and `12345`.
+2. **Fold case.** `r12345` on one side and `R12345` on the other are one parcel.
+3. **Strip the separators** `- . _ /` and the space. `12345-001-000` on one side and
+   `12345001000` on the other are one parcel, and so are `12 345` and `12345`. Both spellings on
+   the same side are not read as one parcel written twice: the tool cannot tell a case or
+   punctuation variant from two parcels, so it counts that as a collision and refuses (class 4).
 4. **Apply the ceiling.** Measured here, after the separators are gone, so `1234-5678-9012-3456-7890-1234-567`
    is refused as 27 digits rather than accepted as 33 characters.
 5. **Strip a check digit,** if asked. After the ceiling, so an identifier from another scheme can
@@ -401,7 +403,7 @@ gives for `PARCEL_ID` (see References). It is a guard against mixing two keyspac
 |---|---|
 | 0 | Everything reconciles. |
 | 1 | Something did not reconcile: class 1, 2, 3, or a rejected identifier. |
-| 2 | A file could not be read (not UTF-8, empty, no header, or the identifier column named twice), `--write-csv` could not be written, or both files hold a header and no records (verdict `NOTHING TO COMPARE`, never `RECONCILES`). |
+| 2 | A file could not be read (not UTF-8, an unterminated quote, empty, no header, or the identifier column named twice), `--write-csv` could not be written, or both files hold a header and no records (verdict `NOTHING TO COMPARE`, never `RECONCILES`). |
 | 3 | Refused. The identifier rule would merge two parcels. |
 | 64 | Usage error. |
 
@@ -530,9 +532,21 @@ out what it left out, grouped by reason.
   years, and earlier guides were not compared.
 - The symbolic link behaviour of `--write-csv` comes from Python's `open()`. The self-test does
   not create a link.
-- An unterminated quote in an input CSV is not an error on Python 3.12 and 3.13. The rest of the
-  file becomes one identifier and the run exits 1, not 2, although the exit 2 message names an
-  unterminated quote as a cause.
+- The CSV reader is strict. An unterminated quote is refused with exit 2, because Python's
+  default reader would fold the rest of the file into one cell and drop every record in it. Strict
+  mode also refuses a closing quote that is followed by more text before the comma, such as
+  `"ab"c`, which a lenient reader would accept.
+- A run whose every match came from added zeros still exits 0. Read the `PADDED` section, or the
+  padded count in `--json`, before you trust it: a script that reads only the exit code will not
+  see it.
+- The 26 character ceiling replaced an earlier 18 character default. Set `--max-len 18` to get
+  the old rule.
+- A header-only file on one side, with records on the other, is reported as findings (exit 1),
+  not as a failed export (exit 2). Only two empty sides give `NOTHING TO COMPARE`.
+- No Unicode normalisation is done under `--non-ascii allow`, so visually identical identifiers
+  can be reported as two parcels.
+- A write failure ends the run with exit 2 after the report is printed. Check the exit code
+  before you read the report as the whole result.
 - The report goes to standard output with `print`, so a closed output pipe can end the run with
   a traceback and exit 1.
 - The 100% branch figure excludes the `if __name__ == "__main__"` line and the `sys.exit(main())`

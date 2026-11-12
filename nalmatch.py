@@ -587,6 +587,10 @@ def read_csv_rows(path):
     would become one key and the collision guard would never see them. A file
     that is not UTF-8 is refused and named instead (exit 2).
 
+    The reader is strict. Without it, an unterminated quote swallows the rest of
+    the file into one cell, the lost records are never counted, and the run
+    can report RECONCILES. Strict makes it a csv.Error, which is exit 2.
+
     The whole file is decoded in one call, so the offset in the refusal is the
     byte's position in the file. A text wrapper decodes in chunks and reports
     the position inside the chunk, which is wrong for any file over 8 KB.
@@ -597,7 +601,8 @@ def read_csv_rows(path):
         # utf-8-sig behaviour, done by hand so the offset above stays whole
         # file: one leading byte order mark is dropped, as Excel writes it.
         text = text[1:] if text.startswith(u"\ufeff") else text
-        reader = csv.reader(io.StringIO(text, newline=""))
+        reader = csv.reader(io.StringIO(text, newline=""),
+                            strict=True)
         fields = list(next(reader, None) or [])
         rows = []
         blank_lines = 0
@@ -1572,9 +1577,18 @@ def self_test():
               "message, not a traceback and exit 1  <-- pinned defect")
         quote = os.path.join(tmp, "quote.csv")
         write(quote, b'PARCEL_ID\n"1\n2\n3\n')
-        check(read_csv_rows(quote)[1] == [{"PARCEL_ID": "1\n2\n3\n"}],
-              "an unterminated quote swallows the rest of the file into one "
-              "cell, which is Python's csv behaviour and is not warned about")
+        raises(lambda: read_csv_rows(quote),
+               "an unterminated quote is refused, not swallowed into one "
+               "cell  <-- pinned defect")
+        uq_roll = os.path.join(tmp, "uq-roll.csv")
+        write(uq_roll, b"PARCEL_ID\n049300117\n")
+        uq_gis = os.path.join(tmp, "uq-gis.csv")
+        write(uq_gis, b'PARCEL_ID,OWNER\n049300117,"unterminated\n049300118,B\n')
+        rc, out = capture(lambda: main([uq_gis, uq_roll]))
+        check(rc == 2 and "RECONCILES" not in out
+              and "unterminated quote" in out,
+              "a run over a file with an unterminated quote exits 2, not "
+              "RECONCILES with a dropped record  <-- pinned defect")
         dup_header = os.path.join(tmp, "dup-header.csv")
         write(dup_header, b"PARCEL_ID,PARCEL_ID\nA,B\n")
         check(column(read_csv_rows(dup_header)[1], "PARCEL_ID") == ["B"],
