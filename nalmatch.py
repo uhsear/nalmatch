@@ -106,6 +106,7 @@ RECONCILES = "RECONCILES"
 DOES_NOT = "DOES NOT RECONCILE"
 REFUSED = "REFUSED"
 NOTHING = "NOTHING TO COMPARE"
+UNCONFIRMED = "UNCONFIRMED"
 
 
 def is_digits(text):
@@ -242,6 +243,10 @@ class Result(object):
             return NOTHING
         if self.gis_only or self.roll_only or self.duplicates or self.rejected:
             return DOES_NOT
+        if self.padded and len(self.padded) == self.matched:
+            # No match is exact, so nothing shows that the two sides share a
+            # keyspace. The tool cannot tell a lost zero from two parcels.
+            return UNCONFIRMED
         return RECONCILES
 
     def __repr__(self):
@@ -506,6 +511,9 @@ def describe(result, sample=DEFAULT_SAMPLE):
                          % (gis_raw, roll_raw, key))
         if len(result.padded) > sample:
             lines.append("      ... %d more" % (len(result.padded) - sample))
+        if result.verdict == UNCONFIRMED:
+            lines.append("      every match needed a zero added, so nothing "
+                         "shows the two sides share one identifier scheme")
 
     def listing(head, entries, render):
         lines.append(head)
@@ -1200,8 +1208,9 @@ def self_test():
           "and the word None appears nowhere in the report  <-- pinned defect")
     check(as_json(reconcile([None], [], fl))["rejected"][0]["identifier"] == "",
           "the json says the same")
-    check(reconcile(gis[:3], roll[:3], fl).verdict == RECONCILES,
-          "and the same file without those two reconciles")
+    check(reconcile(gis[:3], roll[:3], fl).verdict == UNCONFIRMED,
+          "and the same file without those two matches only by padding, so "
+          "it is unconfirmed, not clean")
     check(reconcile(gis[:3], roll[:3], fl).matched == 3, "all three of them")
 
     # ---- the 312 lot subdivision from the story
@@ -1216,7 +1225,9 @@ def self_test():
     check(r.matched == 312,
           "all 312 reconcile once the lost zero is padded back  "
           "<-- pinned defect")
-    check(r.verdict == RECONCILES, "so the whole subdivision reconciles")
+    check(r.verdict == UNCONFIRMED,
+          "and the whole subdivision is unconfirmed, because no match is "
+          "exact  <-- pinned defect")
     r = reconcile(subdivision, stripped, fl.replace(pad_to=None))
     check(r.matched == 0,
           "and with padding off NOT ONE of them matches, which is the join "
@@ -1253,8 +1264,27 @@ def self_test():
           and doc["counts"]["padded"] == 1,
           "the json carries the same pair and its count")
     r = reconcile(subdivision, stripped, fl)
-    check(len(r.padded) == 312 and r.verdict == RECONCILES,
-          "the 312 lot repair is 312 pad-only matches and still reconciles")
+    check(len(r.padded) == 312 and r.verdict == UNCONFIRMED,
+          "the 312 lot repair is 312 pad-only matches and is not a clean run")
+    check(r.verdict != RECONCILES and r.matched == 312
+          and not (r.gis_only or r.roll_only or r.duplicates),
+          "although every parcel matched and nothing else is wrong")
+    lines = describe(r, 1)
+    check(lines[-1] == "VERDICT: UNCONFIRMED" and "      every match needed a "
+          "zero added, so nothing shows the two sides share one identifier "
+          "scheme" in lines,
+          "the report says why under PADDED and ends on the verdict")
+    check(as_json(r, 1)["verdict"] == UNCONFIRMED
+          and as_json(r, 1)["counts"]["padded"] == 312,
+          "and the json carries the same verdict")
+    check(UNCONFIRMED not in "".join(describe(
+              reconcile(["12345", "AB-7"], ["012345", "AB7"], fl)))
+          and "every match needed" not in "".join(describe(
+              reconcile(["12345", "AB-7"], ["012345", "AB7"], fl))),
+          "one exact match among the padded ones keeps the run clean")
+    check(reconcile(["12345"], ["012345"], fl).verdict == UNCONFIRMED
+          and reconcile(["12345", "7"], ["012345"], fl).verdict == DOES_NOT,
+          "a lone pad-only match is unconfirmed and a leftover still wins")
     lines = describe(r, 2)
     check(sum(1 for x in lines if x.startswith("      gis ")) == 2
           and "      ... 310 more" in lines,
@@ -2030,8 +2060,10 @@ def self_test():
         pad2_csv = os.path.join(tmp, "pad2.csv")
         write(pad2_csv, b"PARCEL_ID\n0000000042\n")
         rc, out = capture(lambda: main([pad_csv, pad2_csv]))
-        check(rc == 0 and "pad numbers to 10" in out,
-              "the width is taken from the wider side")
+        check(rc == 1 and "pad numbers to 10" in out
+              and "VERDICT: UNCONFIRMED" in out,
+              "the width is taken from the wider side, and a run whose only "
+              "match needed padding exits 1  <-- pinned defect")
         rc, out = capture(lambda: main([pad_csv, pad_csv, "--pad", "8"]))
         check(rc == 0 and "pad numbers to 8" in out,
               "--pad 8 sets the width by hand")
