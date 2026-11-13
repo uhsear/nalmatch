@@ -251,7 +251,7 @@ class Result(object):
         if self.padded:
             # One pad-only match is enough. The tool cannot tell a lost zero
             # from two parcels, and an exact match elsewhere does not say
-            # which one a padded pair is: 900 exact lots beside 312 padded
+            # which one a padded pair is: 900 exact lots beside 300 padded
             # ones is the subdivision failure, not a clean run.
             return UNCONFIRMED
         return RECONCILES
@@ -545,6 +545,11 @@ def describe(result, sample=DEFAULT_SAMPLE):
             % len(rejected), rejected,
             lambda e: "%s  ->  %s" % (e.shown or "(empty)",
                                       REASON_TEXT[e.reason]))
+    if (result.verdict == RECONCILES and result.rules.pad_to == 0
+            and result.width):
+        lines.append("NOTE      width %d came from the data. If both files may "
+                     "have lost leading zeros, the tool cannot see it: pass "
+                     "--pad with the true width." % result.width)
     lines.append("VERDICT: %s" % result.verdict)
     return lines
 
@@ -1233,17 +1238,17 @@ def self_test():
           "it is unconfirmed, not clean")
     check(reconcile(gis[:3], roll[:3], fl).matched == 3, "all three of them")
 
-    # ---- the 312 lot subdivision from the story
-    subdivision = ["0%s" % (49300000 + i) for i in range(312)]
+    # ---- the 300 lot subdivision from the story
+    subdivision = ["0%s" % (49300000 + i) for i in range(300)]
     stripped = [str(int(p)) for p in subdivision]
-    check(len(set(subdivision)) == 312, "312 distinct parcels")
+    check(len(set(subdivision)) == 300, "300 distinct parcels")
     check(all(len(p) == 9 for p in subdivision),
           "each nine characters wide with a leading zero")
     check(all(len(s) == 8 for s in stripped),
           "and eight wide after a spreadsheet read them as numbers")
     r = reconcile(subdivision, stripped, fl)
-    check(r.matched == 312,
-          "all 312 reconcile once the lost zero is padded back  "
+    check(r.matched == 300,
+          "all 300 reconcile once the lost zero is padded back  "
           "<-- pinned defect")
     check(r.verdict == UNCONFIRMED,
           "and the whole subdivision is unconfirmed, because no match is "
@@ -1252,13 +1257,13 @@ def self_test():
     check(r.matched == 0,
           "and with padding off NOT ONE of them matches, which is the join "
           "that succeeded  <-- pinned defect")
-    check(len(r.gis_only) == 312 and len(r.roll_only) == 312,
+    check(len(r.gis_only) == 300 and len(r.roll_only) == 300,
           "every parcel is reported on one side only")
-    check(r.verdict == DOES_NOT, "which is the answer nobody had for 9 months")
+    check(r.verdict == DOES_NOT, "which is the answer nobody had for months")
     check(reconcile(subdivision, stripped, generic).matched == 0,
           "generic does not repair it either: padding is a rule you ask for")
-    r = reconcile(subdivision, [str(int(p)) for p in subdivision[:311]], fl)
-    check(r.matched == 311 and len(r.gis_only) == 1,
+    r = reconcile(subdivision, [str(int(p)) for p in subdivision[:299]], fl)
+    check(r.matched == 299 and len(r.gis_only) == 1,
           "one lot missing from the roll is one parcel reported")
 
     # ---- a match that exists only because of padding is named, not hidden
@@ -1286,9 +1291,9 @@ def self_test():
           and doc["counts"]["padded"] == 1,
           "the json carries the same pair and its count")
     r = reconcile(subdivision, stripped, fl)
-    check(len(r.padded) == 312 and r.verdict == UNCONFIRMED,
-          "the 312 lot repair is 312 pad-only matches and is not a clean run")
-    check(r.verdict != RECONCILES and r.matched == 312
+    check(len(r.padded) == 300 and r.verdict == UNCONFIRMED,
+          "the 300 lot repair is 300 pad-only matches and is not a clean run")
+    check(r.verdict != RECONCILES and r.matched == 300
           and not (r.gis_only or r.roll_only or r.duplicates),
           "although every parcel matched and nothing else is wrong")
     lines = describe(r, 1)
@@ -1297,7 +1302,7 @@ def self_test():
           "parcels" in lines,
           "the report says why under PADDED and ends on the verdict")
     check(as_json(r, 1)["verdict"] == UNCONFIRMED
-          and as_json(r, 1)["counts"]["padded"] == 312,
+          and as_json(r, 1)["counts"]["padded"] == 300,
           "and the json carries the same verdict")
     mixed = reconcile(["12345", "AB-7"], ["012345", "AB7"], fl)
     check(mixed.verdict == UNCONFIRMED
@@ -1306,14 +1311,14 @@ def self_test():
     exact = ["%d" % (100000000 + i) for i in range(900)]
     lost = [str(int(p)) for p in subdivision]
     big = reconcile(exact + subdivision, exact + lost, fl)
-    check(big.matched == 1212 and len(big.padded) == 312
+    check(big.matched == 1200 and len(big.padded) == 300
           and not (big.gis_only or big.roll_only or big.duplicates
                    or big.rejected),
-          "900 exact lots beside the 312 that lost a zero all match")
+          "900 exact lots beside the 300 that lost a zero all match")
     check(big.verdict == UNCONFIRMED and describe(big)[-1]
           == "VERDICT: UNCONFIRMED" and as_json(big)["verdict"] == UNCONFIRMED,
-          "and the run is unconfirmed, not clean: 312 unvouched pairs in "
-          "1212 is the failure the tool exists to stop  <-- pinned defect")
+          "and the run is unconfirmed, not clean: 300 unvouched pairs in "
+          "1200 is the failure the tool exists to stop  <-- pinned defect")
     big = reconcile(exact, exact, fl)
     check(big.verdict == RECONCILES and big.padded == [],
           "the same 900 lots with no padded pair stay clean")
@@ -1322,10 +1327,10 @@ def self_test():
           "a lone pad-only match is unconfirmed and a leftover still wins")
     lines = describe(r, 2)
     check(sum(1 for x in lines if x.startswith("      gis ")) == 2
-          and "      ... 310 more" in lines,
+          and "      ... 298 more" in lines,
           "the PADDED list obeys --sample like every other list")
     check(len(as_json(r, 2)["padded"]) == 2
-          and as_json(r, 2)["counts"]["padded"] == 312,
+          and as_json(r, 2)["counts"]["padded"] == 300,
           "and so does the json, while the count stays complete")
     check(reconcile(["012345"], ["012345"], fl).padded == []
           and reconcile(["12345"], ["12345"], fl).padded == [],
@@ -1335,6 +1340,24 @@ def self_test():
           "two files that both lost the same zeros reconcile under --pad "
           "auto: the width is read from the data, so the tool cannot see the "
           "loss and the README Limits names it")
+    notes = [x for x in describe(reconcile(["12345", "12346"],
+                                           ["12345", "12346"], fl))
+             if x.startswith("NOTE")]
+    check(len(notes) == 1 and "width 5 came from the data" in notes[0]
+         ,
+          "a clean run on a width read from the data says so before the "
+          "verdict, because both files may have lost the same zeros and the "
+          "tool cannot see it  <-- pinned defect")
+    check(not [x for x in describe(reconcile(["12345"], ["12345"],
+                                             fl.replace(pad_to=5)))
+               if x.startswith("NOTE")]
+          and not [x for x in describe(reconcile(["12345"], ["12345"],
+                                                 fl.replace(pad_to=None)))
+                   if x.startswith("NOTE")]
+          and not [x for x in describe(reconcile(["12345"], ["012345"], fl))
+                   if x.startswith("NOTE")],
+          "no note for a stated width, for padding off, or for a run that is "
+          "not clean")
     r = reconcile(["49300117", "13000501"], ["49300117", "13000501"],
                   fl.replace(pad_to=9))
     check(r.verdict == RECONCILES and r.width == 9 and r.padded == []
@@ -2454,6 +2477,18 @@ def self_test():
           "while a run that returns a code instead of exiting reports no "
           "SystemExit")
 
+    # ---- importing the file runs no program and takes the other arc of the
+    # __main__ guard, so the guard needs no coverage pragma
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "nalmatch_import_probe", os.path.abspath(__file__))
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+    check(probe.__name__ == "nalmatch_import_probe"
+          and probe.reconcile(["1"], ["1"], probe.profiles()["generic"])
+          .verdict == RECONCILES,
+          "importing nalmatch as a module defines it and runs nothing")
+
     # ---- the footer reports a failure as loudly as a pass
     check(_summary(3, []) == (["3 assertions, 0 failed"], 0),
           "the footer of a green run is the count and 0 failed")
@@ -2645,5 +2680,5 @@ def main(argv=None):
     return 0 if result.verdict == RECONCILES else 1
 
 
-if __name__ == "__main__":  # pragma: no cover
+if __name__ == "__main__":
     sys.exit(main())
