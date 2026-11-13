@@ -1330,6 +1330,17 @@ def self_test():
     check(reconcile(["012345"], ["012345"], fl).padded == []
           and reconcile(["12345"], ["12345"], fl).padded == [],
           "the same string on both sides is not a pad-only match")
+    r = reconcile(["49300117", "13000501"], ["49300117", "13000501"], fl)
+    check(r.verdict == RECONCILES and r.width == 8 and r.padded == [],
+          "two files that both lost the same zeros reconcile under --pad "
+          "auto: the width is read from the data, so the tool cannot see the "
+          "loss and the README Limits names it")
+    r = reconcile(["49300117", "13000501"], ["49300117", "13000501"],
+                  fl.replace(pad_to=9))
+    check(r.verdict == RECONCILES and r.width == 9 and r.padded == []
+          and set(e.key for e in r.gis) == {"049300117", "013000501"},
+          "an exact --pad width pads both files to it, which is the way to "
+          "state the width when the data cannot")
     check(reconcile(["12345"], ["012345"], fl.replace(pad_to=None)).padded
           == [] and reconcile(["12345"], ["012345"], generic).padded == [],
           "with padding off nothing is padded, and the two do not match")

@@ -112,7 +112,7 @@ PASS  while a run that returns a code instead of exiting reports no SystemExit
 PASS  the footer of a green run is the count and 0 failed
 PASS  the footer of a red run names every failed assertion and returns 1
 --------------------------------------------------------------------
-554 assertions, 0 failed
+556 assertions, 0 failed
 ```
 
 ## Requirements
@@ -121,15 +121,15 @@ Python 3.9 or newer and nothing else. No `arcpy`, no third-party package, no net
 database. Both sides are CSVs, which is what every parcel layer and every roll extract can be
 exported as.
 
-The self-test runs 554 assertions and the count is the same on every interpreter it was run on:
+The self-test runs 556 assertions and the count is the same on every interpreter it was run on:
 Windows CPython 3.9.25, 3.12.10 and 3.13.2, ArcGIS Pro's own interpreter (3.13.7), and Ubuntu
 CPython 3.12.3. There is no unavoidable difference between hosts. Measured with
 `coverage run --branch nalmatch.py --self-test` (coverage 7.16.1), branch coverage is 100%
-(1282 statements, 206 branches, 0 missed). That figure depends on one `# pragma: no cover` on
+(1286 statements, 206 branches, 0 missed). That figure depends on one `# pragma: no cover` on
 the `if __name__ == "__main__"` line. Running the file as a program does execute
 `sys.exit(main())`. What cannot be reached is the other arc of that `if`, the one taken when
 the file is imported, because the self-test runs the file as the program. Without the pragma,
-the same run reports 1284 statements, 208 branches, one partial branch (the `if` line, 2637 to the exit) and 99%.
+the same run reports 1288 statements, 208 branches, one partial branch (the `if` line, 2648 to the exit) and 99%.
 The exit codes `main()` forwards are asserted through `main()` directly.
 
 ```
@@ -376,8 +376,7 @@ an identifier.
 
 ## Field names
 
-The Florida tax roll is the Department of Revenue NAL (name, address, legal) and NAP extract,
-extract. The Department's 2025 user's guide names the identifier field
+The Florida tax roll is the Department of Revenue NAL (name, address, legal) and NAP extract. The Department's 2025 user's guide names the identifier field
 `PARCEL_ID`, which is this tool's default on both sides. The same guide says the Department
 publishes the NAL, NAP and SDF files as comma-delimited files with the field names in the header
 row, so a file downloaded from the Department needs nothing added. Do not add a second header
@@ -402,7 +401,7 @@ gives for `PARCEL_ID` (see References). It is a guard against mixing two keyspac
 
 | Code | Meaning |
 |---|---|
-| 0 | Everything reconciles. |
+| 0 | Everything reconciles under the rule on the `KEY RULE` line. With `--pad auto` that width comes from the data, so two files that lost the same leading zeros also exit 0 (see Limits). |
 | 1 | Something did not reconcile: class 1, 2, 3, or a rejected identifier. Also verdict `UNCONFIRMED`: at least one match needed a zero added, so the tool cannot tell a lost zero from two parcels. |
 | 2 | A file could not be read (not UTF-8, an unterminated quote, empty, no header, or the identifier column named twice), `--write-csv` could not be written, or both files hold a header and no records (verdict `NOTHING TO COMPARE`, never `RECONCILES`). |
 | 3 | Refused. The identifier rule would merge two parcels. |
@@ -466,9 +465,10 @@ out what it left out, grouped by reason.
   is not what this is for.
 - The no-such-field error prints the header line of the file it names, so do not name a file
   whose first line is sensitive.
-- nalmatch prefixes an apostrophe, as xwddiff does. The OWASP page lists that prefix, and this
-  repository did not verify that OWASP recommends any other prefix, such as a tab. Neither was
-  tested in a spreadsheet.
+- nalmatch prefixes an apostrophe, as xwddiff does. OWASP names a tab prefix as the
+  Excel-resistant mitigation and warns that the apostrophe can fail after Excel saves and
+  reopens the file. nalmatch uses the apostrophe, as xwddiff does, so the strip on read is
+  trivial. Neither prefix was tested in a spreadsheet.
 - The speed figure is a hand measurement: about 0.15 s wall clock, including interpreter start,
   for 1215 and 1212 rows on Windows 3.13. The self-test does not run a pair that size.
 - OWASP's CSV Injection page now answers 308 and redirects to
@@ -489,7 +489,8 @@ out what it left out, grouped by reason.
   section, confirm the pairs, then trust the run.
 - `--pad auto` takes its width from the data in front of it. Two files that both lost their
   leading zeros pad to the short width and match each other, and the tool cannot tell that from
-  two files that never had them. Pass `--pad` an exact width when you know it.
+  two files that never had them. That run exits 0 with `RECONCILES`, and the self-test pins it.
+  Pass `--pad` an exact width when you know it.
 - A duplicate identifier is reported but does not stop the run, so a downstream join can still
   double count. The verdict is `DOES NOT RECONCILE` and the exit code is 1. The exception CSV
   names it.
@@ -532,7 +533,8 @@ out what it left out, grouped by reason.
   holds terminal control characters is echoed to the terminal.
 - A cell longer than the `csv` module's 131072 character limit makes the whole file exit 2
   with a message. The one million character check in the self-test is about the identifier rule only.
-- A NUL byte inside an identifier is read as data on Python 3.12 and 3.13. If the same bytes
+- A NUL byte inside an identifier is read as data on Python 3.11 and newer and refused with exit 2
+  on 3.9. Only 3.9, 3.12 and 3.13 were run, so the 3.11 boundary is not measured. If the same bytes
   appear on both sides they match each other and the run can exit 0. If only one side has them
   the identifier shows up as a mismatch (exit 1). On Python 3.9 the `csv` module raises
   `line contains NUL` and the run exits 2. The self-test does not pin this difference.
@@ -566,6 +568,15 @@ out what it left out, grouped by reason.
   not as a failed export (exit 2). Only two empty sides give `NOTHING TO COMPARE`.
 - No Unicode normalisation is done under `--non-ascii allow`, so visually identical identifiers
   can be reported as two parcels.
+- An `UNCONFIRMED` run can leave an exception CSV with only a header row, because padded pairs
+  are not exception rows. Read the report or `--json`, which name the padded pairs, and do not
+  load an empty CSV as a clean result.
+- Rows with more cells than the header are read by position and the extra cells are ignored, so
+  quote any field that contains a comma.
+- The report prints identifiers verbatim, so view output from untrusted files in a pager that
+  escapes control characters.
+- With `--non-ascii allow`, open the exception CSV through the spreadsheet's import dialog and
+  choose UTF-8.
 - A write failure ends the run with exit 2 after the report is printed. Check the exit code
   before you read the report as the whole result.
 - The report goes to standard output with `print`, so a closed output pipe can end the run with
@@ -624,4 +635,4 @@ Other single-file tools in this portfolio that pair with this one:
 - [fcload](https://github.com/uhsear/fcload) - load the reconciled result without corrupting it
 - [roadmiles](https://github.com/uhsear/roadmiles) - the same refusal to certify a number nobody checked
 - [geocodesift](https://github.com/uhsear/geocodesift) - the same lesson applied to a geocoded batch
-- [pl94](https://github.com/uhsear/pl94) - census blocks for the same county, reconciled against the county total
+- [pl94](https://github.com/uhsear/pl94) - census blocks for one county, reconciled against the county total
